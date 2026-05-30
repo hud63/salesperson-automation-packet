@@ -1,0 +1,500 @@
+{
+  "updatedAt": "2026-05-25T17:01:29.019Z",
+  "createdAt": "2026-05-22T18:13:03.823Z",
+  "id": "REPLACE_WITH_WORKFLOW_ID",
+  "name": "Email Intelligence Harvester",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "email-ai-harvest",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c3f3c3f3-0001-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "email-intelligence-harvester-webhook"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "c3f3c3f3-0001-0000-0000-000000000030",
+      "name": "Daily 6am PT",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=50&q={{ encodeURIComponent('to:sales.user@example.com in:inbox newer_than:' + ($('Webhook').isExecuted ? ($('Webhook').item.json.body?.lookback_days || 3) : 3) + 'd -from:noreply -from:no-reply -category:promotions -category:social') }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "options": {}
+      },
+      "id": "c3f3c3f3-0001-0000-0000-000000000002",
+      "name": "List inbox emails",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        220
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/data_sources/REPLACE_WITH_DATA_SOURCE_ID/query",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"page_size\": 100\n}",
+        "options": {}
+      },
+      "id": "c3f3c3f3-0001-0000-0000-000000000003",
+      "name": "Get Existing Open Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        380
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      },
+      "id": "c3f3c3f3-0001-0000-0000-000000000004",
+      "name": "Merge inbox + open tasks",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        600,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// items[0] = Gmail list response  ({messages: [{id, threadId}], resultSizeEstimate})\n// items[1] = Open Tasks query response\n\nconst items = $input.all();\nconst gmailList = items[0].json;\nconst openTasks = items[1].json;\n\n// Build set of Gmail message IDs already harvested\nconst existingMessageIds = new Set();\nfor (const page of (openTasks.results || [])) {\n  const props = page.properties || {};\n  const notes = ((props.Notes && props.Notes.rich_text) || []).map(t => t.plain_text || '').join('');\n  const source = ((props.Source && props.Source.rich_text) || []).map(t => t.plain_text || '').join('');\n  const combined = `${notes}\\n${source}`;\n  for (const m of combined.matchAll(/Gmail message ID: ([^\\s\\n]+)/g)) {\n    existingMessageIds.add(m[1]);\n  }\n}\n\nconst messages = gmailList.messages || [];\nconst toProcess = [];\nconst skipped = [];\nfor (const m of messages) {\n  if (existingMessageIds.has(m.id)) {\n    skipped.push({ reason: 'already harvested', message_id: m.id });\n    continue;\n  }\n  toProcess.push({ message_id: m.id, thread_id: m.threadId });\n}\n\nreturn { to_process: toProcess, skipped, skipped_count: skipped.length, to_process_count: toProcess.length, total_inbox: messages.length };"
+      },
+      "id": "c3f3c3f3-0001-0000-0000-000000000005",
+      "name": "Plan harvest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "to_process",
+        "options": {}
+      },
+      "id": "c3f3c3f3-0001-0000-0000-000000000006",
+      "name": "Split messages",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://gmail.googleapis.com/gmail/v1/users/me/messages/{{ $json.message_id }}?format=full",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "options": {}
+      },
+      "id": "c3f3c3f3-0001-0000-0000-000000000007",
+      "name": "Fetch message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1140,
+        300
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Decode Gmail message into plain text + metadata; attach LLM prompt.\n\nconst message = $('Split messages').item.json;\nconst gm = $json || {};\nconst payload = gm.payload || {};\nconst headers = payload.headers || [];\n\nfunction headerVal(name) {\n  const h = headers.find(h => h.name && h.name.toLowerCase() === name.toLowerCase());\n  return h ? h.value : '';\n}\n\nconst subject = headerVal('Subject');\nconst from = headerVal('From');\nconst to = headerVal('To');\nconst cc = headerVal('Cc');\nconst date = headerVal('Date');\nconst listUnsub = headerVal('List-Unsubscribe');\n\n// Walk parts to find text/plain or text/html\nfunction findText(part) {\n  if (!part) return '';\n  if (part.mimeType === 'text/plain' && part.body && part.body.data) {\n    return Buffer.from(part.body.data, 'base64').toString('utf-8');\n  }\n  if (part.parts) {\n    for (const p of part.parts) {\n      const t = findText(p);\n      if (t) return t;\n    }\n  }\n  // fallback to html if no plain\n  if (part.mimeType === 'text/html' && part.body && part.body.data) {\n    const html = Buffer.from(part.body.data, 'base64').toString('utf-8');\n    // crude html-to-text\n    return html.replace(/<style[\\s\\S]*?<\\/style>/gi, '').replace(/<script[\\s\\S]*?<\\/script>/gi, '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/\\s+/g, ' ').trim();\n  }\n  return '';\n}\n\nlet bodyText = findText(payload);\nif (!bodyText) bodyText = gm.snippet || '';\nbodyText = bodyText.slice(0, 20000);\n\n// Build Gmail thread URL\nconst threadUrl = `https://mail.google.com/mail/u/0/#inbox/${message.thread_id}`;\n\n// If it looks like a newsletter (has List-Unsubscribe), still classify but signal to LLM\nconst isLikelyAutomated = !!listUnsub;\n\nconst prompt = `You are extracting action items from an email.\n\nFrom: ${from}\nTo: ${to}\nCc: ${cc}\nDate: ${date}\nSubject: ${subject}\nList-Unsubscribe header present: ${isLikelyAutomated ? 'YES (likely automated/newsletter)' : 'no'}\n\nBody:\n${bodyText}\n\n---\n\nDetermine whether this email contains action items requiring follow-through.\n\nSkip (return empty action_items) if:\n- The email is a newsletter, marketing, or automated notification\n- The email is a calendar invite/decline/accept confirmation\n- The email is a receipt or transactional confirmation\n- The email is FYI/forwarded with no explicit ask\n- The email is a no-reply automated alert\n\nFor actionable emails, extract every action item. For each:\n- text: the action item, rewritten as a concise imperative (\u2264120 chars)\n- owner: \"Sales User\" if Sales User is responsible. Otherwise the named person, or \"Unassigned\".\n- due_date: ISO date YYYY-MM-DD if mentioned, else null\n- context: one short phrase (\u226480 chars) explaining what the AI relates to\n\nOwner attribution:\n- If sender is asking Sales User to do X \u2192 owner = \"Sales User\"\n- If Sales User (sender) is asking someone to do X \u2192 owner = that person\n- If someone said they would do X for Sales User \u2192 owner = that person\n\nProject classification (pick ONE):\n- Example Company Pipeline\n- Example Company Business Development\n- Corporate Development\n- Content\n- Operations\n- Personal\n- Non-Sales Admin\n- Other\n\nReturn ONLY JSON, no prose:\n{\n  \"project\": \"<one>\",\n  \"summary\": \"<one-sentence summary of email purpose, \u2264180 chars>\",\n  \"action_items\": [\n    {\"text\": \"...\", \"owner\": \"Sales User\", \"due_date\": null, \"context\": \"...\"}\n  ]\n}`;\n\nreturn { message, subject, from, to, date, body_length: bodyText.length, thread_url: threadUrl, is_automated: isLikelyAutomated, prompt };"
+      },
+      "id": "c3f3c3f3-0001-0000-0000-000000000008",
+      "name": "Build prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-haiku-4-5\",\n  \"max_tokens\": 2000,\n  \"messages\": [{ \"role\": \"user\", \"content\": {{ JSON.stringify($json.prompt) }} }]\n}",
+        "options": {}
+      },
+      "id": "c3f3c3f3-0001-0000-0000-000000000009",
+      "name": "Anthropic extract",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1500,
+        300
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "name": "REPLACE_WITH_ANTHROPICAPI_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse LLM, build Open Tasks payload.\n\nconst meta = $('Build prompt').item.json;\nconst message = meta.message;\nconst llm = $json || {};\n\nlet extracted = null;\nlet error = null;\ntry {\n  const text = (llm.content || []).map(c => c.text || '').join('');\n  const m = text.match(/\\{[\\s\\S]*\\}/);\n  if (!m) throw new Error('no JSON in response: ' + text.slice(0, 200));\n  extracted = JSON.parse(m[0]);\n} catch (e) {\n  error = e.message;\n}\n\nif (error || !extracted) {\n  return { skip: true, reason: error || 'parse failed', message_id: message.message_id, subject: meta.subject };\n}\n\nconst ais = (extracted.action_items || []).filter(a => a && a.text && a.text.trim());\nif (ais.length === 0) {\n  return { skip: true, reason: 'no AIs extracted', message_id: message.message_id, subject: meta.subject, summary: extracted.summary };\n}\n\nconst emailDate = (meta.date || '').slice(0, 30);\nconst ownerSet = [...new Set(ais.map(a => a.owner || 'Unassigned'))];\nconst titleBase = (((ais[0] || {}).text || '').trim() + (ais.length > 1 ? ' (+' + (ais.length - 1) + ' more)' : '')).slice(0, 190);\n\nconst notesLines = [];\nnotesLines.push(`Source URL: ${meta.thread_url}`);\nnotesLines.push(`Gmail message ID: ${message.message_id}`);\nnotesLines.push(`Gmail thread ID: ${message.thread_id}`);\nnotesLines.push(`From: ${meta.from || ''}`);\nnotesLines.push(`To: ${meta.to || ''}`);\nnotesLines.push(`Date: ${emailDate}`);\nnotesLines.push(`Summary: ${extracted.summary || ''}`);\nnotesLines.push('');\nnotesLines.push('Action items:');\nfor (const a of ais) {\n  const due = a.due_date ? ` (due ${a.due_date})` : '';\n  notesLines.push(`- [${a.owner || 'Unassigned'}] ${a.text}${due}${a.context ? ` \u2014 ${a.context}` : ''}`);\n}\nconst notesText = notesLines.join('\\n').slice(0, 1990);\n\nconst validProjects = new Set(['Example Company Pipeline','Example Company Business Development','Corporate Development','Content','Operations','Personal','Non-Sales Admin']);\nconst projectName = validProjects.has(extracted.project) ? extracted.project : null;\n\nconst properties = {\n  Task: { title: [{ text: { content: titleBase } }] },\n  Status: { status: { name: 'Not started' } },\n  Source: { rich_text: [{ text: { content: `Email: ${meta.subject || ''}`.slice(0, 190) } }] },\n  Notes: { rich_text: [{ text: { content: notesText } }] },\n};\nif (projectName) properties.Project = { select: { name: projectName } };\n\nreturn {\n  skip: false,\n  message_id: message.message_id,\n  subject: meta.subject,\n  ai_count: ais.length,\n  owners: ownerSet,\n  notion_payload: {\n    parent: { data_source_id: 'REPLACE_WITH_DATA_SOURCE_ID' },\n    properties,\n  },\n  preview: { title: titleBase, notes: notesText.slice(0, 300) },\n};"
+      },
+      "id": "c3f3c3f3-0001-0000-0000-000000000010",
+      "name": "Parse + build payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const out = [];\nfor (const item of $input.all()) {\n  if (item.json && item.json.notion_payload && !item.json.skip) {\n    out.push({ json: item.json });\n  }\n}\nreturn out;"
+      },
+      "id": "c3f3c3f3-0001-0000-0000-000000000011",
+      "name": "Filter creates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1860,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.notion_payload) }}",
+        "options": {}
+      },
+      "id": "c3f3c3f3-0001-0000-0000-000000000012",
+      "name": "Create Open Tasks row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2040,
+        300
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const created = $input.all().map(i => i.json);\nconst plan = $('Plan harvest').first().json;\n\nconst summary = {\n  inbox_total: plan.total_inbox,\n  to_process: plan.to_process_count,\n  skipped_at_plan: plan.skipped_count,\n  rows_created: created.length,\n  generated_at: new Date().toISOString(),\n};\n\nreturn { summary, plan_skipped: plan.skipped, created };"
+      },
+      "id": "c3f3c3f3-0001-0000-0000-000000000013",
+      "name": "Aggregate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "c3f3c3f3-0001-0000-0000-000000000014",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "List inbox emails",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Existing Open Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily 6am PT": {
+      "main": [
+        [
+          {
+            "node": "List inbox emails",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Existing Open Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List inbox emails": {
+      "main": [
+        [
+          {
+            "node": "Merge inbox + open tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Existing Open Tasks": {
+      "main": [
+        [
+          {
+            "node": "Merge inbox + open tasks",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge inbox + open tasks": {
+      "main": [
+        [
+          {
+            "node": "Plan harvest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan harvest": {
+      "main": [
+        [
+          {
+            "node": "Split messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split messages": {
+      "main": [
+        [
+          {
+            "node": "Fetch message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch message": {
+      "main": [
+        [
+          {
+            "node": "Build prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build prompt": {
+      "main": [
+        [
+          {
+            "node": "Anthropic extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic extract": {
+      "main": [
+        [
+          {
+            "node": "Parse + build payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse + build payload": {
+      "main": [
+        [
+          {
+            "node": "Filter creates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter creates": {
+      "main": [
+        [
+          {
+            "node": "Create Open Tasks row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Open Tasks row": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 600,
+    "timezone": "America/Los_Angeles"
+  },
+  "staticData": {
+    "node:Daily 6am PT": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "tags": []
+}

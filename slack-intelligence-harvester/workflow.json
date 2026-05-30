@@ -1,0 +1,466 @@
+{
+  "updatedAt": "2026-05-25T17:01:30.580Z",
+  "createdAt": "2026-05-22T18:31:50.253Z",
+  "id": "REPLACE_WITH_WORKFLOW_ID",
+  "name": "Slack Intelligence Harvester",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "slack-ai-harvest",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d4f4d4f4-0001-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "slack-intelligence-harvester-webhook"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "d4f4d4f4-0001-0000-0000-000000000030",
+      "name": "Daily 6am PT",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://slack.com/api/search.messages?query={{ encodeURIComponent('<@REPLACE_WITH_SLACK_USER_ID> after:' + (new Date(Date.now() - ($('Webhook').isExecuted ? ($('Webhook').item.json.body?.lookback_days || 3) : 3) * 86400000).toISOString().slice(0,10))) }}&sort=timestamp&sort_dir=desc&count=30",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "options": {}
+      },
+      "id": "d4f4d4f4-0001-0000-0000-000000000002",
+      "name": "Search Slack mentions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        220
+      ],
+      "credentials": {
+        "slackApi": {
+          "name": "REPLACE_WITH_SLACKAPI_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/data_sources/REPLACE_WITH_DATA_SOURCE_ID/query",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"page_size\": 100\n}",
+        "options": {}
+      },
+      "id": "d4f4d4f4-0001-0000-0000-000000000003",
+      "name": "Get Existing Open Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        380
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      },
+      "id": "d4f4d4f4-0001-0000-0000-000000000004",
+      "name": "Merge slack + open tasks",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        600,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// items[0] = Slack search response\n// items[1] = Open Tasks response\nconst items = $input.all();\nconst slack = items[0].json;\nconst openTasks = items[1].json;\n\nif (!slack.ok) {\n  return { to_process: [], skipped: [{ reason: 'Slack search failed: ' + (slack.error || 'unknown') }], skipped_count: 1, to_process_count: 0, slack_total: 0 };\n}\n\nconst messages = (slack.messages && slack.messages.matches) || [];\n\n// Dedupe by channel/ts\nconst existingKeys = new Set();\nfor (const page of (openTasks.results || [])) {\n  const props = page.properties || {};\n  const notes = ((props.Notes && props.Notes.rich_text) || []).map(t => t.plain_text || '').join('');\n  for (const m of notes.matchAll(/Slack ts: ([^\\s\\n]+)\\/([^\\s\\n]+)/g)) {\n    existingKeys.add(`${m[1]}/${m[2]}`);\n  }\n}\n\nconst SELF = 'REPLACE_WITH_SLACK_USER_ID';\nconst toProcess = [];\nconst skipped = [];\nfor (const m of messages) {\n  const key = `${m.channel && m.channel.id}/${m.ts}`;\n  if (existingKeys.has(key)) { skipped.push({ reason: 'already harvested', ts: m.ts }); continue; }\n  // Skip messages from Sales User himself \u2014 he's not asking himself anything\n  if (m.user === SELF) { skipped.push({ reason: 'self-sent', ts: m.ts }); continue; }\n  // Skip very short messages (likely reactions, not asks)\n  if (!m.text || m.text.length < 20) { skipped.push({ reason: 'too short', ts: m.ts }); continue; }\n  toProcess.push({\n    ts: m.ts,\n    channel_id: m.channel && m.channel.id,\n    channel_name: m.channel && m.channel.name,\n    user: m.user,\n    username: m.username,\n    text: m.text,\n    permalink: m.permalink,\n    iid: m.iid,\n  });\n}\n\nreturn { to_process: toProcess, skipped, skipped_count: skipped.length, to_process_count: toProcess.length, slack_total: messages.length };"
+      },
+      "id": "d4f4d4f4-0001-0000-0000-000000000005",
+      "name": "Plan harvest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "to_process",
+        "options": {}
+      },
+      "id": "d4f4d4f4-0001-0000-0000-000000000006",
+      "name": "Split messages",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Build the LLM prompt for one Slack message.\n\nconst msg = $json;\n\nconst prompt = `You are extracting action items from a Slack message that mentioned Sales User.\n\nChannel: ${msg.channel_name || msg.channel_id || 'unknown'}\nFrom: ${msg.username || msg.user || 'unknown'}\nTimestamp: ${new Date(parseFloat(msg.ts) * 1000).toISOString()}\nPermalink: ${msg.permalink}\n\nMessage:\n${msg.text}\n\n---\n\nDetermine whether this Slack message contains action items for Sales User or for someone else mentioned in it.\n\nSkip (return empty action_items) if:\n- The message is a casual reaction, social chatter, or kudos\n- The message is FYI/notification with no ask\n- The message is automated (bot, integration)\n- The mention of Sales User is incidental (e.g., \"thanks Sales User\" without a follow-up ask)\n\nFor actionable messages, extract every action item. For each:\n- text: the action item, rewritten as a concise imperative (\u2264120 chars)\n- owner: \"Sales User\" if the sender is asking Sales User to do something. Otherwise the named person if a different owner is named, else \"Unassigned\".\n- due_date: ISO date YYYY-MM-DD if mentioned, else null\n- context: one short phrase (\u226480 chars) explaining what the AI relates to\n\nProject classification (pick ONE):\n- Example Company Pipeline\n- Example Company Business Development\n- Corporate Development\n- Content\n- Operations\n- Personal\n- Non-Sales Admin\n- Other\n\nReturn ONLY JSON:\n{\n  \"project\": \"<one>\",\n  \"summary\": \"<one-sentence summary, \u2264180 chars>\",\n  \"action_items\": [\n    {\"text\": \"...\", \"owner\": \"Sales User\", \"due_date\": null, \"context\": \"...\"}\n  ]\n}`;\n\nreturn { msg, prompt };"
+      },
+      "id": "d4f4d4f4-0001-0000-0000-000000000007",
+      "name": "Build prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-haiku-4-5\",\n  \"max_tokens\": 2000,\n  \"messages\": [{ \"role\": \"user\", \"content\": {{ JSON.stringify($json.prompt) }} }]\n}",
+        "options": {}
+      },
+      "id": "d4f4d4f4-0001-0000-0000-000000000008",
+      "name": "Anthropic extract",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        300
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "name": "REPLACE_WITH_ANTHROPICAPI_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const msg = $('Build prompt').item.json.msg;\nconst llm = $json || {};\n\nlet extracted = null;\nlet error = null;\ntry {\n  const text = (llm.content || []).map(c => c.text || '').join('');\n  const m = text.match(/\\{[\\s\\S]*\\}/);\n  if (!m) throw new Error('no JSON in response');\n  extracted = JSON.parse(m[0]);\n} catch (e) {\n  error = e.message;\n}\n\nif (error || !extracted) {\n  return { skip: true, reason: error || 'parse failed', ts: msg.ts };\n}\n\nconst ais = (extracted.action_items || []).filter(a => a && a.text && a.text.trim());\nif (ais.length === 0) {\n  return { skip: true, reason: 'no AIs extracted', ts: msg.ts, summary: extracted.summary };\n}\n\nconst tsIso = new Date(parseFloat(msg.ts) * 1000).toISOString().slice(0, 10);\nconst ownerSet = [...new Set(ais.map(a => a.owner || 'Unassigned'))];\nconst sender = msg.username || msg.user || 'unknown';\nconst channel = msg.channel_name || msg.channel_id || 'unknown';\nconst titleBase = (((ais[0] || {}).text || '').trim() + (ais.length > 1 ? ' (+' + (ais.length - 1) + ' more)' : '')).slice(0, 190);\n\nconst notesLines = [];\nnotesLines.push(`Source URL: ${msg.permalink}`);\nnotesLines.push(`Slack ts: ${msg.channel_id}/${msg.ts}`);\nnotesLines.push(`Channel: ${channel}`);\nnotesLines.push(`From: ${sender}`);\nnotesLines.push(`Date: ${tsIso}`);\nnotesLines.push(`Summary: ${extracted.summary || ''}`);\nnotesLines.push('');\nnotesLines.push('Message snippet:');\nnotesLines.push(`> ${(msg.text || '').slice(0, 300)}`);\nnotesLines.push('');\nnotesLines.push('Action items:');\nfor (const a of ais) {\n  const due = a.due_date ? ` (due ${a.due_date})` : '';\n  notesLines.push(`- [${a.owner || 'Unassigned'}] ${a.text}${due}${a.context ? ` \u2014 ${a.context}` : ''}`);\n}\nconst notesText = notesLines.join('\\n').slice(0, 1990);\n\nconst validProjects = new Set(['Example Company Pipeline','Example Company Business Development','Corporate Development','Content','Operations','Personal','Non-Sales Admin']);\nconst projectName = validProjects.has(extracted.project) ? extracted.project : null;\n\nconst properties = {\n  Task: { title: [{ text: { content: titleBase } }] },\n  Status: { status: { name: 'Not started' } },\n  Source: { rich_text: [{ text: { content: `Slack: #${channel} from ${sender}`.slice(0, 190) } }] },\n  Notes: { rich_text: [{ text: { content: notesText } }] },\n};\nif (projectName) properties.Project = { select: { name: projectName } };\n\nreturn {\n  skip: false,\n  ts: msg.ts,\n  ai_count: ais.length,\n  owners: ownerSet,\n  notion_payload: {\n    parent: { data_source_id: 'REPLACE_WITH_DATA_SOURCE_ID' },\n    properties,\n  },\n  preview: { title: titleBase, notes: notesText.slice(0, 300) },\n};"
+      },
+      "id": "d4f4d4f4-0001-0000-0000-000000000009",
+      "name": "Parse + build payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const out = [];\nfor (const item of $input.all()) {\n  if (item.json && item.json.notion_payload && !item.json.skip) {\n    out.push({ json: item.json });\n  }\n}\nreturn out;"
+      },
+      "id": "d4f4d4f4-0001-0000-0000-000000000010",
+      "name": "Filter creates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.notion_payload) }}",
+        "options": {}
+      },
+      "id": "d4f4d4f4-0001-0000-0000-000000000011",
+      "name": "Create Open Tasks row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1860,
+        300
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const created = $input.all().map(i => i.json);\nconst plan = $('Plan harvest').first().json;\nconst summary = {\n  slack_total: plan.slack_total,\n  to_process: plan.to_process_count,\n  skipped_at_plan: plan.skipped_count,\n  rows_created: created.length,\n  generated_at: new Date().toISOString(),\n};\nreturn { summary, plan_skipped: plan.skipped, created };"
+      },
+      "id": "d4f4d4f4-0001-0000-0000-000000000012",
+      "name": "Aggregate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2040,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "d4f4d4f4-0001-0000-0000-000000000013",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2220,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Search Slack mentions",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Existing Open Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily 6am PT": {
+      "main": [
+        [
+          {
+            "node": "Search Slack mentions",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Existing Open Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Slack mentions": {
+      "main": [
+        [
+          {
+            "node": "Merge slack + open tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Existing Open Tasks": {
+      "main": [
+        [
+          {
+            "node": "Merge slack + open tasks",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge slack + open tasks": {
+      "main": [
+        [
+          {
+            "node": "Plan harvest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan harvest": {
+      "main": [
+        [
+          {
+            "node": "Split messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split messages": {
+      "main": [
+        [
+          {
+            "node": "Build prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build prompt": {
+      "main": [
+        [
+          {
+            "node": "Anthropic extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic extract": {
+      "main": [
+        [
+          {
+            "node": "Parse + build payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse + build payload": {
+      "main": [
+        [
+          {
+            "node": "Filter creates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter creates": {
+      "main": [
+        [
+          {
+            "node": "Create Open Tasks row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Open Tasks row": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 600,
+    "timezone": "America/Los_Angeles"
+  },
+  "staticData": {
+    "node:Daily 6am PT": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "tags": []
+}

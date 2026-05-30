@@ -1,0 +1,434 @@
+{
+  "updatedAt": "2026-05-25T17:01:22.963Z",
+  "createdAt": "2026-05-22T19:46:21.921Z",
+  "id": "REPLACE_WITH_WORKFLOW_ID",
+  "name": "Cross-Source Intelligence Dedupe",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-dedupe",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "f6f6f6f6-0001-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "cross-source-intelligence-dedupe-webhook"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 4 * * *"
+            }
+          ]
+        }
+      },
+      "id": "f6f6f6f6-0001-0000-0000-000000000030",
+      "name": "Daily 4am PT",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/data_sources/REPLACE_WITH_DATA_SOURCE_ID/query",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"page_size\": 100,\n  \"filter\": {\n    \"and\": [\n      { \"or\": [\n        { \"property\": \"Status\", \"status\": { \"equals\": \"Not started\" } },\n        { \"property\": \"Status\", \"status\": { \"equals\": \"In progress\" } }\n      ] }\n    ]\n  },\n  \"sorts\": [{ \"timestamp\": \"created_time\", \"direction\": \"descending\" }]\n}",
+        "options": {}
+      },
+      "id": "f6f6f6f6-0001-0000-0000-000000000002",
+      "name": "Get recent open rows",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        300
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Format rows for LLM clustering. Keep last 14 days only.\nconst pages = $json.results || [];\nconst cutoff = new Date(Date.now() - 14 * 86400000);\n\nfunction extract(prop) {\n  if (!prop) return '';\n  if (prop.title) return prop.title.map(t => t.plain_text || '').join('');\n  if (prop.rich_text) return prop.rich_text.map(t => t.plain_text || '').join('');\n  return '';\n}\n\nconst rows = [];\nfor (const p of pages) {\n  const created = new Date(p.created_time);\n  if (created < cutoff) continue;\n  const props = p.properties || {};\n  rows.push({\n    id: p.id,\n    url: p.url,\n    created: p.created_time,\n    task: extract(props.Task),\n    source: extract(props.Source),\n    project: (props.Project && props.Project.select && props.Project.select.name) || null,\n    notes_excerpt: extract(props.Notes).slice(0, 600),\n  });\n}\n\nif (rows.length < 2) {\n  return [{ json: { skip: true, reason: 'fewer than 2 rows to dedupe', row_count: rows.length } }];\n}\n\nconst formatted = rows.map((r, i) => `[${i}] id=${r.id} created=${r.created.slice(0,10)} project=${r.project || '-'}\\n  task: ${r.task}\\n  source: ${r.source}\\n  notes: ${r.notes_excerpt.slice(0, 400)}`).join('\\n\\n');\n\nconst prompt = `You are clustering action item rows that refer to the SAME underlying real-world action item, even when captured from different channels (meeting, email, Slack).\n\nROWS (${rows.length}):\n\n${formatted}\n\n---\n\nGroup rows that represent the SAME action item. A group must have 2+ rows. Examples of valid groupings:\n- A meeting AI \"Send Bassem the deck\" + an email \"Following up on the deck for Bassem\" = same item, different channels\n- A Slack ask \"Sales User can you intro me to Executive\" + a meeting AI \"Sales User to intro X to Executive\" = same item, different channels\n- A meeting AI \"Reschedule the Bassem meeting\" + an email \"Proposing new time for Bassem\" = same item\n\nDo NOT group:\n- Different action items that share a person or topic\n- Different commitments to the same person (\"send deck\" vs \"send proposal\")\n- Rows about different meetings/events even if attendees overlap\n- Different reschedule/availability requests from DIFFERENT senders (Barret rescheduling is NOT the same as Tony rescheduling, even though both are \"reschedule a call with Sales User\")\n- Different intro/connection requests between different parties\n- Generic category overlap (both are \"reschedule\" or both are \"meeting\") is NOT enough \u2014 the SPECIFIC underlying action must match including the SAME other party\n\nFor each group, pick the OLDEST row (lowest created_time) as the primary. Other rows are duplicates that should be merged into the primary.\n\nReturn ONLY JSON. If no groups found, return empty array:\n{\n  \"groups\": [\n    {\n      \"primary_id\": \"<oldest row id>\",\n      \"duplicate_ids\": [\"<row id>\", \"<row id>\"],\n      \"confidence\": 0.0-1.0,\n      \"reason\": \"<one sentence>\"\n    }\n  ]\n}\n\nOnly emit groups with confidence >= 0.9. Be conservative \u2014 false-positive merges are worse than missed merges.`;\n\nreturn [{ json: { rows, prompt } }];"
+      },
+      "id": "f6f6f6f6-0001-0000-0000-000000000003",
+      "name": "Format + prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        620,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-haiku-4-5\",\n  \"max_tokens\": 3000,\n  \"messages\": [{ \"role\": \"user\", \"content\": {{ JSON.stringify($json.prompt || '') }} }]\n}",
+        "options": {}
+      },
+      "id": "f6f6f6f6-0001-0000-0000-000000000004",
+      "name": "Anthropic cluster",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        840,
+        300
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "name": "REPLACE_WITH_ANTHROPICAPI_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Parse LLM output, validate with entity-overlap guardrail, emit merge items.\n\nconst llm = $input.first().json;\nconst rows = $('Format + prompt').first().json.rows || [];\nconst rowsById = Object.fromEntries(rows.map(r => [r.id, r]));\n\n// Generic / category words that DO NOT count as specific entities.\nconst GENERIC = new Set([\n  // people Sales User talks to constantly \u2014 not useful for distinguishing rows\n  'Sales User','Sales User','Executive','Stakeholder','common-name',\n  // template / structural words from the Notes formatting\n  'ais','source','summary','from','to','channel','attendees','date','action','items','notes','task','tasks','gmail','message','id','ts','permalink','iid','paired','recall','notetaker','zoom','google','meet','teams','slack','calendar','calendar_event','event','url','href','snippet','section',\n  // action verbs (Notes content)\n  'meeting','call','email','thread','chat','intro','introduction','introduce','connect','reschedule','setup','schedule','arrange','send','sent','draft','confirm','review','check','update','followup','follow','plan','plans','propose','proposed','availability','responding','respond','deliverable','investigate','resolve','identify','develop','brief','prepare','attend','share','provide','create','build','make','run','start','finish','complete','sign','sign-off','approve','reject','consider','evaluate','explore','discuss','establish','define','draft','outline','consolidate','reconcile','coordinate','manage','handle','sort','triage','submit','file','log','post','mention','flag','tag','assign','reassign','delegate',\n  // generic project / company / team words\n  'project','company','team','staff','people','person','firm','group','board','member','members','client','customer','partner','vendor','contractor','employee',\n  // time / date words\n  'today','tomorrow','yesterday','morning','afternoon','evening','week','day','month','year','noon','am','pm','est','pst','pdt','edt','eastern','western','pacific','time','timezone','tz',\n  // domain category words\n  'data','center','centers','dc','hyperscaler','solar','battery','energy','power','industry',\n  // sample_company / company self-references\n  'sample_company','zero','rfi','0rfi','rollup','corp','corporate','dev','development','operations','content','personal',\n  // placeholder / Speaker labels\n  'speaker','speaker_a','speaker_b','speaker_c','unassigned','tbd','none','unknown',\n  // months / days\n  'jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec','january','february','march','april','june','july','august','september','october','november','december','mon','tue','wed','thu','fri','sat','sun','monday','tuesday','wednesday','thursday','friday','saturday','sunday',\n]);\n\nfunction extractEntities(row) {\n  const blob = `${row.task || ''} ${row.notes_excerpt || ''} ${row.source || ''}`;\n  const set = new Set();\n  // Proper nouns: capitalized tokens of length >= 3 \u2014 typically named entities\n  for (const m of blob.matchAll(/\\b([A-Z][a-zA-Z]{2,})\\b/g)) {\n    const tok = m[1].toLowerCase();\n    if (!GENERIC.has(tok)) set.add(tok);\n  }\n  // Email domain hosts (@schneider.com \u2192 schneider)\n  for (const m of blob.matchAll(/@([a-z0-9-]+)\\./gi)) {\n    const tok = m[1].toLowerCase();\n    if (!GENERIC.has(tok) && tok.length >= 3) set.add(tok);\n  }\n  // Explicit \"From:\" line extraction (case-insensitive; Slack sender often lowercase like \"From: barret\")\n  for (const m of blob.matchAll(/^\\s*From:\\s*([A-Za-z][A-Za-z0-9_-]{1,40})/gim)) {\n    const tok = m[1].toLowerCase();\n    if (!GENERIC.has(tok) && tok.length >= 3) set.add(tok);\n  }\n  // \"Channel:\" line extraction\n  for (const m of blob.matchAll(/^\\s*Channel:\\s*([A-Za-z][A-Za-z0-9_-]{1,40})/gim)) {\n    const tok = m[1].toLowerCase();\n    if (!GENERIC.has(tok) && tok.length >= 3) set.add(tok);\n  }\n  return set;\n}\n\nfunction intersect(a, b) {\n  return [...a].filter(x => b.has(x));\n}\n\nlet parsed = null;\ntry {\n  const text = (llm.content || []).map(c => c.text || '').join('');\n  const m = text.match(/\\{[\\s\\S]*\\}/);\n  if (!m) throw new Error('no JSON');\n  parsed = JSON.parse(m[0]);\n} catch (e) {\n  return [];\n}\n\nconst rawGroups = (parsed.groups || []).filter(g => g.confidence >= 0.9 && g.primary_id && Array.isArray(g.duplicate_ids) && g.duplicate_ids.length > 0);\n\nconst out = [];\nconst rejected = [];\nfor (const g of rawGroups) {\n  const primary = rowsById[g.primary_id];\n  if (!primary) { rejected.push({ group: g, reason: 'primary row missing from cache' }); continue; }\n  const dups = g.duplicate_ids.map(id => rowsById[id]).filter(Boolean);\n  if (dups.length === 0) { rejected.push({ group: g, reason: 'all duplicate rows missing' }); continue; }\n\n  // ENTITY GUARDRAIL: every dup must share \u22651 specific entity with primary\n  const primaryEntities = extractEntities(primary);\n  let allDupsOverlap = true;\n  const overlapDebug = [];\n  for (const dup of dups) {\n    const dupEntities = extractEntities(dup);\n    const overlap = intersect(primaryEntities, dupEntities);\n    overlapDebug.push({ dup_id: dup.id, primary_entities: [...primaryEntities], dup_entities: [...dupEntities], overlap });\n    if (overlap.length === 0) { allDupsOverlap = false; break; }\n  }\n\n  if (!allDupsOverlap) {\n    rejected.push({ group: g, reason: 'no specific entity overlap', debug: overlapDebug });\n    continue;\n  }\n\n  const mergeNote = `\\n\\n--- merged from ${dups.length} duplicate row(s) on ${new Date().toISOString().slice(0,10)} (LLM conf=${g.confidence}) ---\\n`;\n  const dupSourceLines = dups.map(d => `- ${d.source} | ${d.url}`).join('\\n');\n  const newNotes = `${primary.notes_excerpt}${mergeNote}${dupSourceLines}\\nReason: ${g.reason || ''}`.slice(0, 1990);\n\n  out.push({ json: { primary_id: g.primary_id, dup_ids: g.duplicate_ids, dup_rows: dups, confidence: g.confidence, reason: g.reason, new_notes: newNotes, overlap_debug: overlapDebug } });\n}\n\n// Surface rejections in workflow for transparency (Aggregate will pick them up)\nthis.helpers && console.log('Dedupe rejections:', JSON.stringify(rejected).slice(0, 1000));\nreturn out;"
+      },
+      "id": "f6f6f6f6-0001-0000-0000-000000000005",
+      "name": "Plan merges",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.notion.com/v1/pages/{{ $json.primary_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { Notes: { rich_text: [{ text: { content: $json.new_notes } }] } } }) }}",
+        "options": {}
+      },
+      "id": "f6f6f6f6-0001-0000-0000-000000000006",
+      "name": "Update primary notes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1260,
+        220
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Emit one archive item per duplicate ID across all groups.\nconst out = [];\nfor (const item of $input.all()) {\n  const plan = item.json;\n  for (const id of (plan.dup_ids || [])) {\n    out.push({ json: { archive_id: id, merged_into: plan.primary_id, reason: plan.reason || '', new_notes: plan.new_notes } });\n  }\n}\nreturn out;"
+      },
+      "id": "f6f6f6f6-0001-0000-0000-000000000007",
+      "name": "Split dup ids",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.notion.com/v1/pages/{{ $json.archive_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ archived: true }) }}",
+        "options": {}
+      },
+      "id": "f6f6f6f6-0001-0000-0000-000000000008",
+      "name": "Archive duplicate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1460,
+        380
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3,
+        "options": {}
+      },
+      "id": "f6f6f6f6-0001-0000-0000-000000000040",
+      "name": "Sync merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Aggregate stats from both branches.\nlet primaryUpdates = [];\nlet archives = [];\ntry { primaryUpdates = $('Update primary notes').all().map(i => i.json).filter(j => j && j.object === 'page'); } catch (e) {}\ntry { archives = $('Archive duplicate').all().map(i => i.json).filter(j => j && j.object === 'page'); } catch (e) {}\n\nconst plansText = (($('Anthropic cluster').first().json.content || []).map(c => c.text || '').join(''));\nlet parsedPlans = null;\ntry {\n  const m = plansText.match(/\\{[\\s\\S]*\\}/);\n  if (m) parsedPlans = JSON.parse(m[0]);\n} catch (e) {}\n\nreturn {\n  summary: {\n    groups_identified: (parsedPlans && parsedPlans.groups || []).length,\n    primaries_updated: primaryUpdates.length,\n    duplicates_archived: archives.length,\n    generated_at: new Date().toISOString(),\n  },\n  groups: parsedPlans && parsedPlans.groups || [],\n  primaries_updated: primaryUpdates.map(p => ({ id: p.id, url: p.url })),\n  duplicates_archived: archives.map(p => ({ id: p.id, url: p.url })),\n};"
+      },
+      "id": "f6f6f6f6-0001-0000-0000-000000000009",
+      "name": "Aggregate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1860,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "f6f6f6f6-0001-0000-0000-000000000010",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2060,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get recent open rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily 4am PT": {
+      "main": [
+        [
+          {
+            "node": "Get recent open rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get recent open rows": {
+      "main": [
+        [
+          {
+            "node": "Format + prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format + prompt": {
+      "main": [
+        [
+          {
+            "node": "Anthropic cluster",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic cluster": {
+      "main": [
+        [
+          {
+            "node": "Plan merges",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Sync merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Plan merges": {
+      "main": [
+        [
+          {
+            "node": "Update primary notes",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Split dup ids",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split dup ids": {
+      "main": [
+        [
+          {
+            "node": "Archive duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update primary notes": {
+      "main": [
+        [
+          {
+            "node": "Sync merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Archive duplicate": {
+      "main": [
+        [
+          {
+            "node": "Sync merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Sync merge": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 600,
+    "timezone": "America/Los_Angeles"
+  },
+  "staticData": {
+    "node:Daily 4am PT": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "tags": []
+}

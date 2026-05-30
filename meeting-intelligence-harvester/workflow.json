@@ -1,0 +1,789 @@
+{
+  "updatedAt": "2026-05-25T17:01:27.452Z",
+  "createdAt": "2026-05-22T15:20:04.100Z",
+  "id": "REPLACE_WITH_WORKFLOW_ID",
+  "name": "Meeting Intelligence Harvester",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "meeting-ai-harvest",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "meeting-intelligence-harvester-webhook"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000030",
+      "name": "Daily 6am PT",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://example-n8n.app.n8n.cloud/webhook/meetings-federated-query",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"lookback_days\": {{ $('Webhook').isExecuted ? ($('Webhook').item.json.body?.lookback_days || 14) : 14 }}\n}",
+        "options": {}
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000002",
+      "name": "Get Federated Meetings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        380,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/data_sources/REPLACE_WITH_DATA_SOURCE_ID/query",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"page_size\": 100\n}",
+        "options": {}
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000003",
+      "name": "Get Existing Open Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        380,
+        380
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000004",
+      "name": "Merge fed + open tasks",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        580,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// items[0] = federated webhook response\n// items[1] = open tasks query response\n\nconst items = $input.all();\nconst fed = items[0].json;\nconst openTasks = items[1].json;\n\n// Build set of source URLs already harvested (extracted from Notes/Source fields)\nconst existingSourceUrls = new Set();\nfor (const page of (openTasks.results || [])) {\n  const props = page.properties || {};\n  const notes = ((props.Notes && props.Notes.rich_text) || []).map(t => t.plain_text || '').join('');\n  const source = ((props.Source && props.Source.rich_text) || []).map(t => t.plain_text || '').join('');\n  const combined = `${notes}\\n${source}`;\n  for (const m of combined.matchAll(/https:\\/\\/www\\.notion\\.so\\/[A-Za-z0-9\\-]+/g)) {\n    existingSourceUrls.add(m[0]);\n  }\n}\n\n// Canonical meeting list: prefer CRM side when paired (Sales User's notes go there)\nconst meetings = [];\nfor (const p of (fed.pairs || [])) {\n  meetings.push({ primary: p.zr, secondary: p.re, paired: true });\n}\nfor (const m of (fed.unpaired_sample_company || [])) meetings.push({ primary: m, secondary: null, paired: false });\nfor (const m of (fed.unpaired_recall || [])) meetings.push({ primary: m, secondary: null, paired: false });\n\nfunction extractPageId(notionUrl) {\n  if (!notionUrl) return null;\n  const m = notionUrl.match(/([0-9a-f]{32})(?:\\?|$)/i);\n  if (!m) return null;\n  const h = m[1];\n  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;\n}\n\n// v1.2: For PAIRED meetings, prefer Recall as primary (structured Actions table).\n// For UNPAIRED CRM, keep CRM (LLM extract path).\n// For UNPAIRED Recall, parse Actions table directly.\nconst toProcess = [];\nconst skipped = [];\nfor (const meeting of meetings) {\n  let primary = meeting.primary;\n  let secondary = meeting.secondary;\n  // For paired meetings, swap so Recall is primary\n  if (meeting.paired && primary && primary.side === 'sample_company' && secondary && secondary.side === 'recall') {\n    primary = meeting.secondary;\n    secondary = meeting.primary;\n  }\n  if (!primary || !primary.notion_url) { skipped.push({reason:'no primary', meeting}); continue; }\n  if (existingSourceUrls.has(primary.notion_url)) { skipped.push({reason:'already harvested (primary)', title: primary.title, url: primary.notion_url}); continue; }\n  // Also dedupe if the secondary URL has been harvested in a prior run\n  if (secondary && secondary.notion_url && existingSourceUrls.has(secondary.notion_url)) { skipped.push({reason:'already harvested (secondary)', title: primary.title, url: primary.notion_url}); continue; }\n  const pageId = primary.id || extractPageId(primary.notion_url);\n  if (!pageId) { skipped.push({reason:'no page id', title: primary.title}); continue; }\n  toProcess.push({\n    page_id: pageId,\n    notion_url: primary.notion_url,\n    title: primary.title,\n    start_iso: primary.start_iso,\n    attendees: primary.attendees,\n    company: primary.company,\n    side: primary.side,\n    paired: meeting.paired,\n    paired_with_url: secondary ? secondary.notion_url : null,\n    paired_with_title: secondary ? secondary.title : null,\n  });\n}\n\nreturn { to_process: toProcess, skipped, skipped_count: skipped.length, to_process_count: toProcess.length, existing_sources_count: existingSourceUrls.size };"
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000005",
+      "name": "Plan harvest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "to_process",
+        "options": {}
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000006",
+      "name": "Split meetings",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "REPLACE_WITH_WORKFLOW_ID",
+                    "leftValue": "={{ $json.side }}",
+                    "rightValue": "sample_company",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": false,
+              "outputKey": "sample_company"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose"
+                },
+                "conditions": [
+                  {
+                    "id": "REPLACE_WITH_WORKFLOW_ID",
+                    "leftValue": "={{ $json.side }}",
+                    "rightValue": "recall",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": false,
+              "outputKey": "recall"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000020",
+      "name": "Route by side",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1050,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.notion.com/v1/blocks/{{ $json.page_id }}/children?page_size=100",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000021",
+      "name": "Fetch Recall blocks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1230,
+        460
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "REPLACE_WITH_HTTPHEADERAUTH_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse Recall page's `## Actions` markdown table directly \u2014 no LLM.\n// Recall pages are populated by the Agendino pipeline with a top-level structured table.\n\nfunction blocksToText(blocks) {\n  let out = '';\n  for (const b of blocks || []) {\n    const t = b.type; if (!b[t]) continue;\n    const rt = (b[t].rich_text || []).map(r => r.plain_text || '').join('');\n    if (t === 'paragraph') out += `${rt}\\n`;\n    else if (t === 'heading_1') out += `\\n# ${rt}\\n`;\n    else if (t === 'heading_2') out += `\\n## ${rt}\\n`;\n    else if (t === 'heading_3') out += `\\n### ${rt}\\n`;\n    else if (t === 'bulleted_list_item') out += `- ${rt}\\n`;\n    else if (t === 'numbered_list_item') out += `1. ${rt}\\n`;\n    else if (t === 'table_row') {\n      const cells = (b.table_row.cells || []).map(c => c.map(x => x.plain_text || '').join('')).join(' | ');\n      out += `| ${cells} |\\n`;\n    } else if (rt) out += `${rt}\\n`;\n  }\n  return out;\n}\n\nfunction normalizeOwner(raw) {\n  if (!raw) return 'Unassigned';\n  // \"Speaker A (External Contact)\" \u2192 \"External Contact\". \"Speaker A & Speaker B (Sales User)\" \u2192 \"Sales User\" if last paren-name.\n  const cleaned = raw.trim();\n  if (/^Sales User/i.test(cleaned)) return 'Sales User';\n  const parens = [...cleaned.matchAll(/\\(([^)]+)\\)/g)].map(m => m[1].trim()).filter(Boolean);\n  if (parens.length === 0) {\n    // No parens \u2014 return as-is if not a speaker label, else Unassigned\n    if (/^speaker\\s+[a-z]/i.test(cleaned)) return 'Unassigned';\n    return cleaned.slice(0, 60);\n  }\n  // Look for Sales User first in any paren\n  const salesUserLike = parens.find(p => /Sales User/i.test(p));\n  if (salesUserLike) return 'Sales User';\n  return parens[0].slice(0, 60);\n}\n\nfunction parseDeadline(raw) {\n  if (!raw) return null;\n  const s = raw.trim();\n  if (/not specified|tbd|n\\/a|none/i.test(s)) return null;\n  // ISO date present?\n  const iso = s.match(/(\\d{4}-\\d{2}-\\d{2})/);\n  if (iso) return iso[1];\n  return null; // could add fuzzy parsing later\n}\n\nconst meeting = $('Split meetings').item.json;\nconst blocks = $json.results || [];\nconst bodyText = blocksToText(blocks);\n\n// Find the Actions section\nconst actionsIdx = bodyText.toLowerCase().indexOf('## actions');\nlet ais = [];\nlet summary = '';\n\n// Try to capture a one-sentence summary from a 'Meeting Overview' or first paragraph\nconst overview = bodyText.match(/##\\s*Meeting Overview\\s*\\n+([^\\n#]+)/i);\nif (overview) summary = overview[1].trim().slice(0, 180);\n\nif (actionsIdx === -1) {\n  return { skip: true, reason: 'no Actions section in Recall page', meeting, body_length: bodyText.length };\n}\n\nconst actionsSection = bodyText.slice(actionsIdx);\nconst tableLines = actionsSection.split('\\n').filter(l => l.trim().startsWith('|'));\nif (tableLines.length < 3) {\n  return { skip: true, reason: 'Actions section has no table', meeting, body_length: bodyText.length };\n}\n\n// Skip header (line 0) and separator (line 1)\nfor (const line of tableLines.slice(2)) {\n  let cells = line.split('|').slice(1, -1).map(c => c.trim());\n  if (cells.length < 2) continue;\n  // Auto-detect leading row-number column: if cells[0] is just digits, shift it off\n  if (/^\\d+$/.test(cells[0])) cells.shift();\n  // Expected (after shift): Title | Description | Owner | Deadline | Notes\n  const [title = '', desc = '', owner = '', deadline = '', notes = ''] = cells;\n  const text = (title || desc).trim();\n  if (!text || /^-+$/.test(text)) continue;\n  ais.push({\n    text: text.slice(0, 200),\n    owner: normalizeOwner(owner),\n    due_date: parseDeadline(deadline),\n    context: (notes || desc).trim().slice(0, 200),\n  });\n}\n\nif (ais.length === 0) {\n  return { skip: true, reason: 'no AIs parsed from Recall table', meeting, body_length: bodyText.length };\n}\n\n// Build the Open Tasks row \u2014 same shape as the CRM path\nconst meetingDate = (meeting.start_iso || '').slice(0, 10) || 'no date';\nconst ownerSet = [...new Set(ais.map(a => a.owner || 'Unassigned'))];\nconst titleBase = (((ais[0] || {}).text || '').trim() + (ais.length > 1 ? ' (+' + (ais.length - 1) + ' more)' : '')).slice(0, 190);\n\nconst notesLines = [];\nnotesLines.push(`Source URL: ${meeting.notion_url}`);\nnotesLines.push(`Source side: Recall (HiDock field recording)`);\nif (meeting.paired_with_url) notesLines.push(`Notetaker URL: ${meeting.paired_with_url}`);\nif (meeting.paired_with_title) notesLines.push(`Notetaker title: ${meeting.paired_with_title}`);\nnotesLines.push(`Meeting date: ${meetingDate}`);\nnotesLines.push(`Attendees: ${(meeting.attendees || '').slice(0, 200)}`);\nif (summary) notesLines.push(`Summary: ${summary}`);\nnotesLines.push('');\nnotesLines.push('Action items (from Recall Actions table):');\nfor (const a of ais) {\n  const due = a.due_date ? ` (due ${a.due_date})` : '';\n  notesLines.push(`- [${a.owner}] ${a.text}${due}${a.context ? ` \u2014 ${a.context}` : ''}`);\n}\nconst notesText = notesLines.join('\\n').slice(0, 1990);\n\nconst properties = {\n  Task: { title: [{ text: { content: titleBase } }] },\n  Status: { status: { name: 'Not started' } },\n  Source: { rich_text: [{ text: { content: `Recall meeting: ${meeting.title}`.slice(0, 190) } }] },\n  Notes: { rich_text: [{ text: { content: notesText } }] },\n};\n\nreturn {\n  skip: false,\n  meeting,\n  ai_count: ais.length,\n  owners: ownerSet,\n  notion_payload: {\n    parent: { data_source_id: 'REPLACE_WITH_DATA_SOURCE_ID' },\n    properties,\n  },\n  preview: { title: titleBase, notes: notesText.slice(0, 300) },\n};"
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000022",
+      "name": "Parse Recall Actions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1410,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.notion.com/v1/blocks/{{ $json.page_id }}/children?page_size=100",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000007",
+      "name": "Fetch page blocks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1140,
+        300
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Identify the first block with has_children (Notetaker's transcription block).\n// Falls back to the page id so the next HTTP node always has a valid URL.\nconst top = $json.results || [];\nconst meeting = $('Split meetings').item.json;\nconst child = top.find(b => b && b.has_children);\nreturn {\n  meeting,\n  top_blocks: top,\n  child_block_id: child ? child.id : null,\n  child_block_type: child ? child.type : null,\n  fetch_id: child ? child.id : meeting.page_id,\n};"
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000015",
+      "name": "Pick child block",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1230,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.notion.com/v1/blocks/{{ $json.fetch_id }}/children?page_size=100",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000016",
+      "name": "Fetch child blocks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        220
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Find the first L2 block with has_children \u2014 for Notetaker, this is the `summary` container.\n// Fallback to picking the page id (no-op fetch) if no L2 children exist.\nconst meeting = $('Pick child block').item.json.meeting;\nconst topBlocks = $('Pick child block').item.json.top_blocks || [];\nconst l2Blocks = $json.results || [];\nconst child = l2Blocks.find(b => b && b.has_children);\nreturn {\n  meeting,\n  top_blocks: topBlocks,\n  l2_blocks: l2Blocks,\n  grandchild_block_id: child ? child.id : null,\n  grandchild_block_type: child ? child.type : null,\n  fetch_id: child ? child.id : meeting.page_id,\n};"
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000040",
+      "name": "Pick grandchild block",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1410,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.notion.com/v1/blocks/{{ $json.fetch_id }}/children?page_size=100",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000041",
+      "name": "Fetch grandchild blocks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1500,
+        220
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Convert Notion blocks (recursively) to markdown; attach LLM prompt.\n// Runs once per input item \u2014 $json = current blocks-fetch response, paired with Split meetings.\n\nfunction blocksToText(blocks, depth) {\n  let out = '';\n  const indent = '  '.repeat(depth || 0);\n  for (const b of blocks || []) {\n    const t = b.type;\n    if (!b[t]) continue;\n    const rt = (b[t].rich_text || []).map(r => r.plain_text || '').join('');\n    if (t === 'paragraph') out += `${indent}${rt}\\n`;\n    else if (t === 'heading_1') out += `\\n# ${rt}\\n`;\n    else if (t === 'heading_2') out += `\\n## ${rt}\\n`;\n    else if (t === 'heading_3') out += `\\n### ${rt}\\n`;\n    else if (t === 'bulleted_list_item') out += `${indent}- ${rt}\\n`;\n    else if (t === 'numbered_list_item') out += `${indent}1. ${rt}\\n`;\n    else if (t === 'to_do') out += `${indent}- [ ] ${rt}\\n`;\n    else if (t === 'quote') out += `${indent}> ${rt}\\n`;\n    else if (t === 'toggle') out += `${indent}\u25be ${rt}\\n`;\n    else if (t === 'code') out += `\\n\\`\\`\\`\\n${rt}\\n\\`\\`\\`\\n`;\n    else if (t === 'callout') out += `${indent}> ${rt}\\n`;\n    else if (t === 'table_row') {\n      const cells = (b.table_row.cells || []).map(c => c.map(x => x.plain_text || '').join('')).join(' | ');\n      out += `${indent}| ${cells} |\\n`;\n    } else if (rt) {\n      out += `${indent}${rt}\\n`;\n    } else if (t === 'child_page' || t === 'synced_block' || t === 'column_list' || t === 'column' || t === 'table' || t === 'unsupported') {\n      // these block types contain content only via children \u2014 handled below\n      out += `${indent}[${t}]\\n`;\n    }\n  }\n  return out;\n}\n\nconst meeting = $('Pick grandchild block').item.json.meeting;\nconst topBlocks = $('Pick grandchild block').item.json.top_blocks || [];\nconst l2Blocks = $('Pick grandchild block').item.json.l2_blocks || [];\nconst childBlockId = $('Pick child block').item.json.child_block_id;\nconst grandchildBlockId = $('Pick grandchild block').item.json.grandchild_block_id;\nconst l3Response = $json || {};\nconst l3Blocks = l3Response.results || [];\n\n// Build combined text from all levels we reached.\nlet bodyText = blocksToText(topBlocks, 0);\nif (childBlockId) {\n  bodyText += '\\n\\n---\\n[L2 transcription children]\\n' + blocksToText(l2Blocks, 0);\n}\nif (grandchildBlockId) {\n  bodyText += '\\n\\n---\\n[L3 summary content]\\n' + blocksToText(l3Blocks, 0);\n}\n\nconst hasChildrenIds = topBlocks.filter(b => b.has_children).map(b => `${b.type}:${b.id}`);\n\nconst isRecall = meeting.side === 'recall';\nconst src = isRecall ? 'HiDock field recording (Recall)' : 'Calendar Zoom/Meet (Notion AI Notetaker)';\n\nconst prompt = `You are extracting action items from a meeting record.\n\nMeeting title: ${meeting.title}\nMeeting date: ${meeting.start_iso || 'unknown'}\nMeeting attendees: ${meeting.attendees || 'unknown'}\nMeeting company: ${meeting.company || ''}\nSource: ${src}\n\nMeeting body (markdown):\n\n${bodyText.slice(0, 30000)}\n\n---\n\nExtract every action item from this meeting. For each, identify:\n- text: the action item rewritten as a concise imperative (\u2264120 chars)\n- owner: \"Sales User\" if Sales User is responsible, else the named other person, else \"Unassigned\"\n- due_date: ISO date YYYY-MM-DD if mentioned, else null\n- context: one short phrase (\u226480 chars) explaining what the AI relates to\n\nRules:\n- Skip open questions, FYIs, and informational items. An action item must have a clear deliverable.\n- If the page has a structured \"## Actions\" table or \"### Action Items\" section, those are authoritative.\n- Do NOT invent action items not present in the text.\n\nAlso classify the meeting into ONE of these projects (or \"Other\"):\n- Example Company Pipeline\n- Example Company Business Development\n- Corporate Development\n- Content\n- Operations\n- Personal\n- Non-Sales Admin\n- Other\n\nReturn ONLY JSON, no prose:\n\n{\n  \"project\": \"<one of the above>\",\n  \"summary\": \"<one-sentence summary of what the meeting was about, \u2264180 chars>\",\n  \"action_items\": [\n    {\"text\": \"...\", \"owner\": \"Sales User\", \"due_date\": null, \"context\": \"...\"}\n  ]\n}`;\n\nreturn { meeting, body_length: bodyText.length, has_children_blocks: hasChildrenIds, prompt };"
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000008",
+      "name": "Build prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-haiku-4-5\",\n  \"max_tokens\": 2000,\n  \"messages\": [{ \"role\": \"user\", \"content\": {{ JSON.stringify($json.prompt) }} }]\n}",
+        "options": {}
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000009",
+      "name": "Anthropic extract",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1500,
+        300
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "name": "REPLACE_WITH_ANTHROPICAPI_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse Anthropic response, build Open Tasks page payload. Run once per item.\n\nconst meeting = $('Build prompt').item.json.meeting;\nconst llm = $json || {};\n\nlet extracted = null;\nlet error = null;\ntry {\n  const text = (llm.content || []).map(c => c.text || '').join('');\n  const jsonMatch = text.match(/\\{[\\s\\S]*\\}/);\n  if (!jsonMatch) throw new Error('no JSON in response: ' + text.slice(0, 300));\n  extracted = JSON.parse(jsonMatch[0]);\n} catch (e) {\n  error = e.message;\n}\n\nif (error || !extracted) {\n  return { skip: true, reason: error || 'parse failed', meeting };\n}\n\nconst ais = (extracted.action_items || []).filter(a => a && a.text && a.text.trim());\nif (ais.length === 0) {\n  return { skip: true, reason: 'no AIs extracted', meeting, summary: extracted.summary };\n}\n\nconst meetingDate = (meeting.start_iso || '').slice(0, 10) || 'no date';\nconst ownerSet = [...new Set(ais.map(a => a.owner || 'Unassigned'))];\nconst titleBase = (((ais[0] || {}).text || '').trim() + (ais.length > 1 ? ' (+' + (ais.length - 1) + ' more)' : '')).slice(0, 190);\n\nconst notesLines = [];\nnotesLines.push(`Source URL: ${meeting.notion_url}`);\nif (meeting.paired_with_url) notesLines.push(`Paired with: ${meeting.paired_with_url}`);\nnotesLines.push(`Meeting date: ${meetingDate}`);\nnotesLines.push(`Attendees: ${(meeting.attendees || '').slice(0, 200)}`);\nnotesLines.push(`Summary: ${extracted.summary || ''}`);\nnotesLines.push('');\nnotesLines.push('Action items:');\nfor (const a of ais) {\n  const due = a.due_date ? ` (due ${a.due_date})` : '';\n  notesLines.push(`- [${a.owner || 'Unassigned'}] ${a.text}${due}${a.context ? ` \u2014 ${a.context}` : ''}`);\n}\nconst notesText = notesLines.join('\\n').slice(0, 1990);\n\nconst validProjects = new Set(['Example Company Pipeline','Example Company Business Development','Corporate Development','Content','Operations','Personal','Non-Sales Admin']);\nconst projectName = validProjects.has(extracted.project) ? extracted.project : null;\n\nconst properties = {\n  Task: { title: [{ text: { content: titleBase } }] },\n  Status: { status: { name: 'Not started' } },\n  Source: { rich_text: [{ text: { content: `Meeting: ${meeting.title}`.slice(0, 190) } }] },\n  Notes: { rich_text: [{ text: { content: notesText } }] },\n};\nif (projectName) properties.Project = { select: { name: projectName } };\n\nreturn {\n  skip: false,\n  meeting,\n  ai_count: ais.length,\n  owners: ownerSet,\n  notion_payload: {\n    parent: { data_source_id: 'REPLACE_WITH_DATA_SOURCE_ID' },\n    properties,\n  },\n  preview: { title: titleBase, notes: notesText.slice(0, 300) },\n};"
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000010",
+      "name": "Parse + build payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Pass through only items whose Parse step produced a notion_payload.\nconst out = [];\nfor (const item of $input.all()) {\n  if (item.json && item.json.notion_payload && !item.json.skip) {\n    out.push({ json: item.json });\n  }\n}\nreturn out;"
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000011",
+      "name": "Filter creates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1860,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.notion_payload) }}",
+        "options": {}
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000012",
+      "name": "Create Open Tasks row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2040,
+        220
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all branches into a final summary\nconst created = $input.all().map(i => i.json);\nconst plan = $('Plan harvest').first().json;\n\nconst summary = {\n  meetings_planned: plan.to_process_count,\n  meetings_skipped_at_plan: plan.skipped_count,\n  rows_created: created.length,\n  generated_at: new Date().toISOString(),\n};\n\nreturn { summary, plan_skipped: plan.skipped, created };"
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000013",
+      "name": "Aggregate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "b2f2b2f2-0001-0000-0000-000000000014",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Federated Meetings",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Existing Open Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily 6am PT": {
+      "main": [
+        [
+          {
+            "node": "Get Federated Meetings",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Existing Open Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Federated Meetings": {
+      "main": [
+        [
+          {
+            "node": "Merge fed + open tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Existing Open Tasks": {
+      "main": [
+        [
+          {
+            "node": "Merge fed + open tasks",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge fed + open tasks": {
+      "main": [
+        [
+          {
+            "node": "Plan harvest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan harvest": {
+      "main": [
+        [
+          {
+            "node": "Split meetings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split meetings": {
+      "main": [
+        [
+          {
+            "node": "Route by side",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by side": {
+      "main": [
+        [
+          {
+            "node": "Fetch page blocks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch Recall blocks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Recall blocks": {
+      "main": [
+        [
+          {
+            "node": "Parse Recall Actions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Recall Actions": {
+      "main": [
+        [
+          {
+            "node": "Filter creates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch page blocks": {
+      "main": [
+        [
+          {
+            "node": "Pick child block",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick child block": {
+      "main": [
+        [
+          {
+            "node": "Fetch child blocks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch child blocks": {
+      "main": [
+        [
+          {
+            "node": "Pick grandchild block",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick grandchild block": {
+      "main": [
+        [
+          {
+            "node": "Fetch grandchild blocks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch grandchild blocks": {
+      "main": [
+        [
+          {
+            "node": "Build prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build prompt": {
+      "main": [
+        [
+          {
+            "node": "Anthropic extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic extract": {
+      "main": [
+        [
+          {
+            "node": "Parse + build payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse + build payload": {
+      "main": [
+        [
+          {
+            "node": "Filter creates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter creates": {
+      "main": [
+        [
+          {
+            "node": "Create Open Tasks row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Open Tasks row": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 600,
+    "timezone": "America/Los_Angeles"
+  },
+  "staticData": {
+    "node:Daily 6am PT": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "tags": []
+}

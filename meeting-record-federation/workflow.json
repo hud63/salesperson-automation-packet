@@ -1,0 +1,241 @@
+{
+  "updatedAt": "2026-05-22T03:42:26.628Z",
+  "createdAt": "2026-05-21T22:33:06.614Z",
+  "id": "REPLACE_WITH_WORKFLOW_ID",
+  "name": "Meeting Record Federation",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "meetings-federated-query",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1f1a1f1-0001-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "meeting-record-federation-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse inputs with defaults. Supports date_from, date_to (ISO dates), and lookback_days.\nconst body = $input.first().json.body || {};\nconst now = new Date();\nconst lookbackDays = body.lookback_days != null ? Number(body.lookback_days) : 30;\n\nlet dateFrom, dateTo;\nif (body.date_from) {\n  dateFrom = new Date(body.date_from);\n} else {\n  dateFrom = new Date(now.getTime() - lookbackDays * 24 * 60 * 60 * 1000);\n}\nif (body.date_to) {\n  dateTo = new Date(body.date_to);\n} else {\n  dateTo = now;\n}\n\nreturn [{\n  json: {\n    date_from: dateFrom.toISOString().slice(0, 10),\n    date_to: dateTo.toISOString().slice(0, 10),\n    lookback_days: lookbackDays,\n  },\n}];"
+      },
+      "id": "a1f1a1f1-0001-0000-0000-000000000002",
+      "name": "Parse inputs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/data_sources/REPLACE_WITH_DATA_SOURCE_ID/query",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"page_size\": 100,\n  \"filter\": {\n    \"property\": \"Start Time\",\n    \"date\": {\n      \"on_or_after\": \"{{ $('Parse inputs').item.json.date_from }}\"\n    }\n  },\n  \"sorts\": [\n    { \"property\": \"Start Time\", \"direction\": \"descending\" }\n  ]\n}",
+        "options": {}
+      },
+      "onError": "continueRegularOutput",
+      "id": "a1f1a1f1-0001-0000-0000-000000000003",
+      "name": "Query CRM Meeting Notes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        620,
+        220
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/data_sources/REPLACE_WITH_DATA_SOURCE_ID/query",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"page_size\": 100,\n  \"filter\": {\n    \"property\": \"Start Time\",\n    \"date\": {\n      \"on_or_after\": \"{{ $('Parse inputs').item.json.date_from }}\"\n    }\n  },\n  \"sorts\": [\n    { \"property\": \"Start Time\", \"direction\": \"descending\" }\n  ]\n}",
+        "options": {}
+      },
+      "onError": "continueRegularOutput",
+      "id": "a1f1a1f1-0001-0000-0000-000000000004",
+      "name": "Query Recall Field Meetings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        620,
+        380
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "REPLACE_WITH_HTTPHEADERAUTH_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      },
+      "id": "a1f1a1f1-0001-0000-0000-000000000005",
+      "name": "Merge responses",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        840,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ===== Pair detection + same-side dupe collapse =====\n// Mirrors tools/meeting_federation/pair_meetings.py\n\nconst WINDOW_MIN = 10;\nconst SAME_SIDE_DUPE_WINDOW_MIN = 5;\nconst TITLE_TOKEN_MIN = 1;\n\nconst STOPWORDS = new Set(['and','or','the','a','an','to','of','for','with','on','in','at','vs','v','via','by','from','into','about','meeting','call','sync','intro','introduction','connect','catch','up','touch','base','follow','followup','discussion','chat','review','update','kickoff','updated','new','weekly','monthly','daily','quarterly','1on1','1-1','11','team','internal','external','zero','rfi','sample_company','0rfi']);\nconst NAME_DROP = new Set(['Sales User','Sales User','Executive','Stakeholder']);\n\nfunction tokenize(t) {\n  if (!t) return new Set();\n  const cleaned = t.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ');\n  const toks = cleaned.split(/\\s+/).filter(Boolean);\n  return new Set(toks.filter(x => x.length > 1 && !STOPWORDS.has(x) && !NAME_DROP.has(x)));\n}\n\nfunction setIntersect(a, b) {\n  const out = new Set();\n  for (const x of a) if (b.has(x)) out.add(x);\n  return out;\n}\n\nfunction parseProp(prop) {\n  if (!prop) return null;\n  if (prop.type === 'title') return (prop.title || []).map(x => x.plain_text || '').join('');\n  if (prop.type === 'rich_text') return (prop.rich_text || []).map(x => x.plain_text || '').join('');\n  if (prop.type === 'date') return prop.date ? prop.date.start : null;\n  if (prop.type === 'url') return prop.url;\n  if (prop.type === 'select') return prop.select ? prop.select.name : null;\n  if (prop.type === 'multi_select') return (prop.multi_select || []).map(x => x.name);\n  return null;\n}\n\nfunction normalizeNotionPage(page, side) {\n  const props = page.properties || {};\n  const title = parseProp(props['Meeting']) || '(untitled)';\n  const startTime = parseProp(props['Start Time']) || parseProp(props['Date']);\n  const created = page.created_time;\n  const attendees = parseProp(props['Attendees']) || '';\n  const company = parseProp(props['Company']) || '';\n  const meetingLink = parseProp(props['Meeting Link']) || '';\n  const recordingUrl = parseProp(props['Recording URL']) || '';\n  const tags = parseProp(props['Tags']) || [];\n  const project = parseProp(props['Project']) || [];\n  const status = parseProp(props['Status']) || '';\n  const type = parseProp(props['Type']) || '';\n  const start = startTime ? new Date(startTime) : null;\n  const anchor = start || (created ? new Date(created) : null);\n  return {\n    side,\n    id: page.id,\n    title,\n    start_iso: startTime,\n    anchor_iso: anchor ? anchor.toISOString() : null,\n    anchor_ms: anchor ? anchor.getTime() : null,\n    anchor_source: start ? 'start' : (created ? 'created' : 'none'),\n    attendees,\n    company,\n    meeting_link: meetingLink,\n    recording_url: recordingUrl,\n    tags,\n    project,\n    status,\n    type,\n    notion_url: page.url,\n  };\n}\n\nfunction collapseDupes(rows) {\n  const dated = rows.filter(r => r.anchor_ms != null).sort((a, b) => a.anchor_ms - b.anchor_ms);\n  const undated = rows.filter(r => r.anchor_ms == null);\n  const out = [];\n  const used = new Set();\n  const w = SAME_SIDE_DUPE_WINDOW_MIN * 60 * 1000;\n\n  for (let i = 0; i < dated.length; i++) {\n    const r = dated[i];\n    if (used.has(r.id)) continue;\n    const cluster = [r];\n    used.add(r.id);\n    const rTokens = tokenize(r.title);\n    for (let j = i + 1; j < dated.length; j++) {\n      const other = dated[j];\n      if (used.has(other.id)) continue;\n      if (other.anchor_ms - r.anchor_ms > w) break;\n      const otherTokens = tokenize(other.title);\n      if (rTokens.size > 0 && otherTokens.size > 0 && setIntersect(rTokens, otherTokens).size > 0) {\n        cluster.push(other);\n        used.add(other.id);\n      }\n    }\n    const primary = { ...cluster[0] };\n    if (cluster.length > 1) {\n      primary.dupe_urls = cluster.slice(1).map(c => c.notion_url);\n      primary.dupe_titles = cluster.slice(1).map(c => c.title);\n    }\n    out.push(primary);\n  }\n\n  const norm = t => (t || '').replace(/\\s+/g, ' ').trim().toLowerCase();\n  const kept = [];\n  for (const u of undated) {\n    const uNorm = norm(u.title);\n    if (!uNorm) { kept.push(u); continue; }\n    let matched = false;\n    for (const d of out) {\n      if (norm(d.title) === uNorm) {\n        d.dupe_urls = (d.dupe_urls || []).concat([u.notion_url]);\n        d.dupe_titles = (d.dupe_titles || []).concat([u.title]);\n        matched = true;\n        break;\n      }\n    }\n    if (!matched) kept.push(u);\n  }\n  return out.concat(kept);\n}\n\nfunction pair(zr, re) {\n  const pairs = [];\n  const rejected = [];\n  const zrColl = collapseDupes(zr);\n  const reColl = collapseDupes(re);\n  const zrDated = zrColl.filter(r => r.anchor_ms != null);\n  const reDated = reColl.filter(r => r.anchor_ms != null);\n  const zrUsed = new Set();\n  const reUsed = new Set();\n  const w = WINDOW_MIN * 60 * 1000;\n\n  const reSorted = [...reDated].sort((a, b) => a.anchor_ms - b.anchor_ms);\n\n  for (const reRow of reSorted) {\n    if (reUsed.has(reRow.id)) continue;\n    const candidates = zrDated.filter(z => !zrUsed.has(z.id) && Math.abs(z.anchor_ms - reRow.anchor_ms) <= w);\n    if (candidates.length === 0) continue;\n    const reNeighbors = reDated.filter(r => r.id !== reRow.id && !reUsed.has(r.id) && Math.abs(r.anchor_ms - reRow.anchor_ms) <= w);\n    const crowded = candidates.length > 1 || reNeighbors.length > 0;\n\n    if (!crowded) {\n      const best = candidates[0];\n      const deltaMin = Math.round(Math.abs(best.anchor_ms - reRow.anchor_ms) / 60000);\n      pairs.push({ zr: best, re: reRow, basis: 'unique candidate in \u00b110 min window', confidence: 'high', delta_min: deltaMin });\n      zrUsed.add(best.id);\n      reUsed.add(reRow.id);\n    } else {\n      const reTokens = tokenize(reRow.title);\n      const scored = candidates.map(c => {\n        const overlap = setIntersect(reTokens, tokenize(c.title));\n        return { c, overlap, n: overlap.size };\n      }).sort((a, b) => (b.n - a.n) || (Math.abs(a.c.anchor_ms - reRow.anchor_ms) - Math.abs(b.c.anchor_ms - reRow.anchor_ms)));\n      const top = scored[0];\n      if (top.n >= TITLE_TOKEN_MIN) {\n        const deltaMin = Math.round(Math.abs(top.c.anchor_ms - reRow.anchor_ms) / 60000);\n        pairs.push({ zr: top.c, re: reRow, basis: `crowded window; title overlap = [${[...top.overlap].sort().join(', ')}]`, confidence: 'high', delta_min: deltaMin });\n        zrUsed.add(top.c.id);\n        reUsed.add(reRow.id);\n      } else {\n        rejected.push({ re: reRow, zr_candidates: scored.map(s => s.c), reason: 'crowded window; no shared title tokens' });\n      }\n    }\n  }\n\n  return {\n    pairs,\n    zr_unpaired: zrColl.filter(r => !zrUsed.has(r.id)),\n    re_unpaired: reColl.filter(r => !reUsed.has(r.id)),\n    rejected,\n  };\n}\n\n// ===== Entry =====\nconst items = $input.all();\nconst zrPages = (items[0] && items[0].json && items[0].json.results) || [];\nconst rePages = (items[1] && items[1].json && items[1].json.results) || [];\n\nconst zr = zrPages.map(p => normalizeNotionPage(p, 'sample_company'));\nconst re = rePages.map(p => normalizeNotionPage(p, 'recall'));\n\nconst result = pair(zr, re);\n\nreturn [{\n  json: {\n    query: $('Parse inputs').item.json,\n    counts: {\n      zr_raw: zr.length,\n      re_raw: re.length,\n      pairs: result.pairs.length,\n      rejected: result.rejected.length,\n      zr_unpaired: result.zr_unpaired.length,\n      re_unpaired: result.re_unpaired.length,\n    },\n    pairs: result.pairs,\n    rejected: result.rejected,\n    unpaired_sample_company: result.zr_unpaired,\n    unpaired_recall: result.re_unpaired,\n    generated_at: new Date().toISOString(),\n  },\n}];"
+      },
+      "id": "a1f1a1f1-0001-0000-0000-000000000006",
+      "name": "Pair detect",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "a1f1a1f1-0001-0000-0000-000000000007",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1280,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse inputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse inputs": {
+      "main": [
+        [
+          {
+            "node": "Query CRM Meeting Notes",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Query Recall Field Meetings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query CRM Meeting Notes": {
+      "main": [
+        [
+          {
+            "node": "Merge responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Recall Field Meetings": {
+      "main": [
+        [
+          {
+            "node": "Merge responses",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge responses": {
+      "main": [
+        [
+          {
+            "node": "Pair detect",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pair detect": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": null,
+  "tags": []
+}

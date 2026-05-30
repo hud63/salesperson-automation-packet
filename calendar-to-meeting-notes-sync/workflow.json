@@ -1,0 +1,362 @@
+{
+  "updatedAt": "2026-05-15T16:59:46.454Z",
+  "createdAt": "2026-05-15T15:03:52.607Z",
+  "id": "REPLACE_WITH_WORKFLOW_ID",
+  "name": "Calendar to Meeting Notes Sync",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 13 * * *"
+            }
+          ]
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Daily 6am PT",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = new Date();\nconst timeMin = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();\nconst tomorrow = new Date(now);\ntomorrow.setDate(tomorrow.getDate() + 8);\nconst timeMax = new Date(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate()).toISOString();\nreturn [{ json: { timeMin, timeMax } }];"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Compute Time Window",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.googleapis.com/calendar/v3/calendars/primary/events",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "timeMin",
+              "value": "={{ $json.timeMin }}"
+            },
+            {
+              "name": "timeMax",
+              "value": "={{ $json.timeMax }}"
+            },
+            {
+              "name": "singleEvents",
+              "value": "true"
+            },
+            {
+              "name": "orderBy",
+              "value": "startTime"
+            },
+            {
+              "name": "maxResults",
+              "value": "100"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Fetch Calendar Events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        380
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "name": "REPLACE_WITH_GOOGLECALENDAROAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const events = $input.first().json.items || [];\nconst userEmail = 'sales.user@example.com';\nconst alias = 'sales.user@example.com';\n\nfunction guessCompany(attendees) {\n  if (!attendees) return '';\n  const externalDomains = attendees\n    .map(a => (a.email || '').split('@')[1])\n    .filter(d => d && !d.includes('example-company') && !d.includes('Sales UserSales User.com') && !d.includes('gmail.com'));\n  if (externalDomains.length === 0) return '';\n  const dom = externalDomains[0].split('.')[0];\n  return dom.charAt(0).toUpperCase() + dom.slice(1);\n}\n\nfunction guessType(summary, attendees) {\n  const s = (summary || '').toLowerCase();\n  if (s.includes('1:1') || s.includes('1-1')) return '1:1';\n  if (s.includes('standup') || s.includes('weekly') || s.includes('sync')) return 'Internal';\n  if (s.includes('intro') || s.includes('discovery') || s.includes('connect')) return 'Discovery';\n  if (s.includes('demo')) return 'BD/Sales';\n  if (s.includes('interview') || s.includes('candidate')) return 'Recruiting';\n  if (!attendees || attendees.length <= 1) return 'Other';\n  const allInternal = attendees.every(a => (a.email || '').includes('example-company'));\n  return allInternal ? 'Internal' : 'Discovery';\n}\n\nfunction getMeetingLink(event) {\n  if (event.hangoutLink) return event.hangoutLink;\n  if (event.conferenceData && event.conferenceData.entryPoints) {\n    const video = event.conferenceData.entryPoints.find(e => e.entryPointType === 'video');\n    if (video) return video.uri;\n  }\n  const desc = event.description || '';\n  const zoomMatch = desc.match(/https:\\/\\/[a-z0-9-]*\\.?zoom\\.us\\/j\\/[0-9]+(\\?pwd=[^\\s\"<>]+)?/);\n  if (zoomMatch) return zoomMatch[0];\n  const teamsMatch = desc.match(/https:\\/\\/teams\\.microsoft\\.com\\/[^\\s\"<>]+/);\n  if (teamsMatch) return teamsMatch[0];\n  return event.location && event.location.startsWith('http') ? event.location : '';\n}\n\nreturn events\n  .filter(e => e.status === 'confirmed')\n  .filter(e => e.start && e.start.dateTime)\n  .filter(e => {\n    const summary = (e.summary || '').toLowerCase();\n    return !['ballet', 'leave for', 'lunch', 'block', 'focus time', 'busy', 'home'].some(k => summary.includes(k));\n  })\n  .filter(e => {\n    if (!e.attendees) return false;\n    const me = e.attendees.find(a => a.email === userEmail || a.email === alias);\n    return me && me.responseStatus !== 'declined';\n  })\n  .map(e => ({\n    json: {\n      eventId: e.id,\n      summary: e.summary || '(no title)',\n      startTime: e.start.dateTime,\n      endTime: e.end ? e.end.dateTime : '',\n      attendees: (e.attendees || [])\n        .filter(a => !a.resource)\n        .map(a => a.displayName ? a.displayName + ' (' + a.email + ')' : a.email)\n        .join('; '),\n      company: guessCompany(e.attendees),\n      type: guessType(e.summary, e.attendees),\n      meetingLink: getMeetingLink(e)\n    }\n  }));"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Filter + Normalize Events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.notion.com/v1/databases/REPLACE_WITH_DATABASE_ID/query",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ filter: { property: \"Calendar Event ID\", rich_text: { equals: $json.eventId } } }) }}",
+        "options": {},
+        "method": "POST"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Check Existing Row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        380
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "REPLACE_WITH_WORKFLOW_ID",
+              "leftValue": "={{ $json.results.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "If New Event",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.notion.com/v1/pages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {},
+        "method": "POST"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Create Notion Row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1700,
+        280
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "calendar-sync-test",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Webhook Trigger (Claude)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        620
+      ],
+      "webhookId": "calendar-to-meeting-notes-sync-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const evt = $('Filter + Normalize Events').item.json;\n\nconst props = {\n  Meeting: { title: [{ text: { content: evt.summary } }] },\n  Date: { date: { start: evt.startTime.split('T')[0] } },\n  'Start Time': { date: { start: evt.startTime, end: evt.endTime || null } },\n  Status: { select: { name: 'Scheduled' } },\n  Type: { select: { name: evt.type } },\n  'Calendar Event ID': { rich_text: [{ text: { content: evt.eventId } }] }\n};\n\nif (evt.attendees) props.Attendees = { rich_text: [{ text: { content: evt.attendees.slice(0, 1900) } }] };\nif (evt.company) props.Company = { rich_text: [{ text: { content: evt.company } }] };\nif (evt.meetingLink) props['Meeting Link'] = { url: evt.meetingLink };\n\nreturn [{\n  json: {\n    body: {\n      parent: { database_id: '3879e985-c4dc-4733-9764-3650427f0aca' },\n      properties: props\n    }\n  }\n}];"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Build Notion Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1480,
+        280
+      ]
+    }
+  ],
+  "connections": {
+    "Daily 6am PT": {
+      "main": [
+        [
+          {
+            "node": "Compute Time Window",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "Compute Time Window",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Time Window": {
+      "main": [
+        [
+          {
+            "node": "Fetch Calendar Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Calendar Events": {
+      "main": [
+        [
+          {
+            "node": "Filter + Normalize Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter + Normalize Events": {
+      "main": [
+        [
+          {
+            "node": "Check Existing Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Existing Row": {
+      "main": [
+        [
+          {
+            "node": "If New Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If New Event": {
+      "main": [
+        [
+          {
+            "node": "Build Notion Payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Webhook Trigger (Claude)": {
+      "main": [
+        [
+          {
+            "node": "Compute Time Window",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Notion Payload": {
+      "main": [
+        [
+          {
+            "node": "Create Notion Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Los_Angeles"
+  },
+  "staticData": {
+    "node:Daily 6am PT": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "tags": []
+}

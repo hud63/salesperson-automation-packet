@@ -1,0 +1,667 @@
+{
+  "updatedAt": "2026-05-25T16:56:45.081Z",
+  "createdAt": "2026-05-22T21:37:12.940Z",
+  "id": "REPLACE_WITH_WORKFLOW_ID",
+  "name": "Daily Sales Standup Drafter",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "daily-standup-draft",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        120,
+        300
+      ],
+      "webhookId": "daily-sales-standup-drafter-webhook"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 6 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000002",
+      "name": "Mon-Fri 6:30am PT",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        120,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compute date windows in America/Los_Angeles. Body opts override.\n// Yesterday rolls Fri->Mon: on Monday, 'yesterday' is Friday.\n// Lookback window covers Sat/Sun on Mondays.\n\nconst body = (($input.first() || {}).json || {}).body || {};\nconst override = body.yesterday_date; // optional 'YYYY-MM-DD' for testing\n\n// Get parts of 'now' in PT via Intl\nfunction ptParts(d) {\n  const fmt = new Intl.DateTimeFormat('en-CA', {\n    timeZone: 'America/Los_Angeles',\n    year: 'numeric', month: '2-digit', day: '2-digit',\n    weekday: 'short', hour: '2-digit', minute: '2-digit',\n    hour12: false,\n  });\n  const parts = Object.fromEntries(fmt.formatToParts(d).map(p => [p.type, p.value]));\n  return parts;\n}\n\nconst now = new Date();\nconst nowParts = ptParts(now);\nconst today_pt = `${nowParts.year}-${nowParts.month}-${nowParts.day}`;\nconst weekday = nowParts.weekday; // Mon, Tue, ...\n\nfunction addDays(iso, n) {\n  const d = new Date(iso + 'T12:00:00Z');\n  d.setUTCDate(d.getUTCDate() + n);\n  return d.toISOString().slice(0, 10);\n}\n\nlet yesterday_pt;\nlet lookback_start_pt;\nif (override) {\n  yesterday_pt = override;\n  lookback_start_pt = override;\n} else if (weekday === 'Mon') {\n  yesterday_pt = addDays(today_pt, -3); // Friday\n  lookback_start_pt = addDays(today_pt, -3); // Friday (captures Fri/Sat/Sun)\n} else {\n  yesterday_pt = addDays(today_pt, -1);\n  lookback_start_pt = addDays(today_pt, -1);\n}\n\n// Build long-form labels\nconst weekdayLong = new Intl.DateTimeFormat('en-US', {\n  timeZone: 'America/Los_Angeles', weekday: 'long',\n}).format(new Date(yesterday_pt + 'T12:00:00Z'));\nconst yesterdayLabel = new Intl.DateTimeFormat('en-US', {\n  timeZone: 'America/Los_Angeles', month: 'long', day: 'numeric',\n}).format(new Date(yesterday_pt + 'T12:00:00Z'));\nconst todayWeekdayLong = new Intl.DateTimeFormat('en-US', {\n  timeZone: 'America/Los_Angeles', weekday: 'long',\n}).format(new Date(today_pt + 'T12:00:00Z'));\nconst todayLabel = new Intl.DateTimeFormat('en-US', {\n  timeZone: 'America/Los_Angeles', month: 'long', day: 'numeric',\n}).format(new Date(today_pt + 'T12:00:00Z'));\n\n// Calendar time bounds: lookback_start 00:00 PT to today 23:59 PT, expressed as RFC3339 with -07:00/-08:00 offset.\n// We use -07:00 during PDT; PT is currently PDT through fall back. n8n cloud is UTC so we hardcode -07:00 here; if DST changes, edit to -08:00.\nconst cal_timeMin = `${lookback_start_pt}T00:00:00-07:00`;\nconst cal_timeMax = `${today_pt}T23:59:59-07:00`;\n\n// Gmail search dates use YYYY/MM/DD\nconst gmail_after = lookback_start_pt.replace(/-/g, '/');\nconst gmail_before = addDays(today_pt, 1).replace(/-/g, '/');\n\nreturn {\n  today_pt,\n  yesterday_pt,\n  lookback_start_pt,\n  weekday,\n  yesterday_long: `${weekdayLong}, ${yesterdayLabel}`,\n  today_long: `${todayWeekdayLong}, ${todayLabel}`,\n  cal_timeMin,\n  cal_timeMax,\n  gmail_after,\n  gmail_before,\n};"
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000003",
+      "name": "Compute dates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        340,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://example-n8n.app.n8n.cloud/webhook/meetings-federated-query",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"date_from\": \"{{ $json.lookback_start_pt }}\",\n  \"date_to\": \"{{ $json.today_pt }}\"\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000010",
+      "name": "Pull federated meetings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        100
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://www.googleapis.com/calendar/v3/calendars/sales.user%40example.com/events?timeMin={{ encodeURIComponent($('Compute dates').item.json.cal_timeMin) }}&timeMax={{ encodeURIComponent($('Compute dates').item.json.cal_timeMax) }}&singleEvents=true&orderBy=startTime&maxResults=100",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000011",
+      "name": "Pull Calendar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        240
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "name": "REPLACE_WITH_GOOGLECALENDAROAUTH2API_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=50&q={{ encodeURIComponent('in:sent after:' + $('Compute dates').item.json.gmail_after + ' before:' + $('Compute dates').item.json.gmail_before) }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000012",
+      "name": "Pull Gmail sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        380
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://slack.com/api/search.messages?query={{ encodeURIComponent('from:<@REPLACE_WITH_SLACK_USER_ID> after:' + $('Compute dates').item.json.lookback_start_pt) }}&sort=timestamp&sort_dir=desc&count=50",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000013",
+      "name": "Pull Slack from Sales User",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        520
+      ],
+      "credentials": {
+        "slackApi": {
+          "name": "REPLACE_WITH_SLACKAPI_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/data_sources/REPLACE_WITH_DATA_SOURCE_ID/query",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"page_size\": 100,\n  \"filter\": {\n    \"and\": [\n      { \"property\": \"Status\", \"status\": { \"does_not_equal\": \"Done\" } }\n    ]\n  },\n  \"sorts\": [\n    { \"timestamp\": \"last_edited_time\", \"direction\": \"descending\" }\n  ]\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000014",
+      "name": "Pull Open Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        660
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000020",
+      "name": "Wait all pulls",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        820,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Assemble all source data into one payload + build the LLM prompt.\n\nconst dates = $('Compute dates').first().json;\nconst meetings = ($('Pull federated meetings').first() || {}).json || {};\nconst cal = ($('Pull Calendar').first() || {}).json || {};\nconst gmail = ($('Pull Gmail sent').first() || {}).json || {};\nconst slack = ($('Pull Slack from Sales User').first() || {}).json || {};\nconst openTasks = ($('Pull Open Tasks').first() || {}).json || {};\n\n// --- Sanitize Meetings ---\nfunction extractTitle(page) {\n  const p = page.properties || {};\n  for (const key of ['Name', 'Title', 'Meeting', 'Task']) {\n    const prop = p[key];\n    if (prop && prop.title) return prop.title.map(t => t.plain_text || '').join('').trim();\n  }\n  for (const k of Object.keys(p)) {\n    if (p[k].title) return p[k].title.map(t => t.plain_text || '').join('').trim();\n  }\n  return '(untitled)';\n}\nfunction extractDate(page) {\n  const p = page.properties || {};\n  for (const key of ['Start Time', 'Date', 'Meeting Date', 'Created']) {\n    if (p[key] && p[key].date && p[key].date.start) return p[key].date.start.slice(0, 10);\n  }\n  return null;\n}\nfunction slimMeeting(page) {\n  return {\n    title: extractTitle(page),\n    date: extractDate(page),\n    url: page.url,\n  };\n}\nconst paired = (meetings.pairs || []).map(p => ({\n  type: 'paired',\n  CRM: p.sample_company ? slimMeeting(p.sample_company) : null,\n  recall: p.recall ? slimMeeting(p.recall) : null,\n}));\nconst unpaired_CRM = (meetings.unpaired_sample_company || []).map(p => ({ type: 'CRM-only', ...slimMeeting(p) }));\nconst unpaired_recall = (meetings.unpaired_recall || []).map(p => ({ type: 'recall-only', ...slimMeeting(p) }));\nconst meetings_clean = {\n  pairs: paired.slice(0, 20),\n  CRM_only: unpaired_CRM.slice(0, 20),\n  recall_only: unpaired_recall.slice(0, 20),\n  counts: meetings.counts || {},\n  error: meetings.error || null,\n};\n\n// --- Sanitize Calendar (filter declined + personal) ---\nconst personalPatterns = [/ballet/i, /school pickup/i, /pickup/i, /leave for/i, /dinner with/i, /family/i, /\\bgym\\b/i, /\\bkid/i];\nfunction isPersonal(s) { return personalPatterns.some(r => r.test(s || '')); }\nconst myEmail = 'sales.user@example.com';\nconst calItems = (cal.items || []).filter(ev => {\n  const myAttendee = (ev.attendees || []).find(a => a.email === myEmail || a.self);\n  if (myAttendee && myAttendee.responseStatus === 'declined') return false;\n  if (ev.status === 'cancelled') return false;\n  if (isPersonal(ev.summary)) return false;\n  return true;\n}).map(ev => ({\n  title: ev.summary || '(no title)',\n  start: (ev.start && (ev.start.dateTime || ev.start.date)) || null,\n  end: (ev.end && (ev.end.dateTime || ev.end.date)) || null,\n  attendees: (ev.attendees || []).map(a => a.email).filter(e => e && e !== myEmail).slice(0, 8),\n  organizer: (ev.organizer || {}).email || null,\n  description_excerpt: (ev.description || '').slice(0, 200),\n  location: ev.location || null,\n  hangout: !!ev.hangoutLink,\n}));\n\nconst cal_yesterday = [];\nconst cal_today = [];\nfor (const ev of calItems) {\n  if (!ev.start) continue;\n  const dayPT = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ev.start));\n  if (dayPT === dates.today_pt) cal_today.push(ev);\n  else cal_yesterday.push(ev);\n}\n\n// --- Sanitize Gmail sent ---\nconst gmail_summary = { sent_count: (gmail.messages || []).length, error: gmail.error || null };\n\n// --- Sanitize Slack (from Sales User) ---\nconst slack_matches = ((slack.messages && slack.messages.matches) || []).filter(m => (m.text || '').length >= 25).slice(0, 30).map(m => ({\n  channel: (m.channel && (m.channel.name || m.channel.id)) || 'unknown',\n  ts_iso: new Date(parseFloat(m.ts) * 1000).toISOString(),\n  text: (m.text || '').slice(0, 400),\n  permalink: m.permalink,\n}));\nconst slack_summary = { ok: !!slack.ok, count: slack_matches.length, messages: slack_matches, error: slack.error || null };\n\n// --- Sanitize Open Tasks ---\nfunction propText(p) {\n  if (!p) return '';\n  if (p.title) return p.title.map(t => t.plain_text || '').join('');\n  if (p.rich_text) return p.rich_text.map(t => t.plain_text || '').join('');\n  if (p.status) return p.status.name || '';\n  if (p.select) return (p.select && p.select.name) || '';\n  if (p.date) return (p.date && p.date.start) || '';\n  return '';\n}\nconst tasks = (openTasks.results || []).slice(0, 50).map(page => {\n  const p = page.properties || {};\n  return {\n    task: propText(p.Task),\n    status: propText(p.Status),\n    project: propText(p.Project),\n    source: propText(p.Source).slice(0, 150),\n    notes: propText(p.Notes).slice(0, 500),\n    last_edited: page.last_edited_time,\n    url: page.url,\n  };\n}).filter(t => t.task);\n\nconst payload = {\n  yesterday_long: dates.yesterday_long,\n  today_long: dates.today_long,\n  yesterday_pt: dates.yesterday_pt,\n  today_pt: dates.today_pt,\n  meetings: meetings_clean,\n  calendar_yesterday: cal_yesterday,\n  calendar_today: cal_today,\n  gmail_summary,\n  slack_summary,\n  open_tasks: tasks,\n};\n\nconst systemPrompt = `You are drafting Sales User's daily standup. Sales User is a sales operator at Example Company.\n\nOUTPUT FORMAT (Slack mrkdwn) - return ONLY the standup text, no preamble, no lead-in:\n\n_Daily Standup - <Today weekday, Month DD>_\n\n_Yesterday_\n- <bullet>\n\n_Today_\n- <bullet>\n\n_Needs / Blockers_\n- <bullet, or 'None at the moment'>\n\nSOURCE PROVENANCE - HARD RULE (read this first):\nEvery bullet you write MUST be directly traceable to a specific item in the source payload (a meetings record, a calendar event, a slack message, or an open_tasks row). Before writing any bullet, identify which exact source supports it.\n\nIf you cannot point to a specific source field that supports the bullet, OMIT the bullet. No exceptions.\n\nDO NOT:\n- Infer assessments not stated in the source (e.g. 'X is a better fit', 'Y is unclear') unless that exact framing appears in a source field.\n- Generalize across multiple ambiguous signals (e.g. 'notable outreach burst', 'multiple advancing threads').\n- Add explanatory framing (e.g. 'for site selection platform pitch', 'as a commissioning acquisition target') unless that exact framing appears in a source field.\n- Restate next-step language unless the source data explicitly contains it.\n\nIf a source item is ambiguous (e.g., open_tasks row with vague text), either drop it or quote it nearly verbatim. Do not interpret.\n\nWhen in doubt: OMIT. A shorter, fully-grounded standup is always better than a longer one with invented framing.\n\nFORMATTING RULES:\n- Italic section headers via Slack underscores: _Yesterday_, _Today_, _Needs / Blockers_\n- Title line uses hyphen: _Daily Standup - Friday, May 15_ (use TODAY's weekday + date)\n- Bullet character is '-'. Max 20 words per bullet.\n- Group order within each section: external meetings first, then outreach, then internal sessions, then workstream progress.\n- Company / individual bullets: 'Company Name (Individual Name): topic or note'\n  Example: 'Example Company (External Contact): happy hour; surfaced SFO procurement intel'\n  Multiple people: 'Example Prospect (External Contact A / External Contact B): 10am PT call'\n- Sub-bullets indented with a hyphen for follow-ons.\n- NO em dashes anywhere. No double-hyphen --. Use single hyphen - or comma.\n- NO emojis. NO filler / preamble.\n\nSPELLING - DO NOT MISSPELL:\n- Executive Stakeholder (NOT 'Executive Ready', NOT 'Executive Reddi')\n- Example Company (use the configured company spelling)\n- Example Subsidiary (one word)\n- Example Business Unit, ExecutiveCo, Example Prospect, Example Contractor, Example Development\n- When unsure of a person's name, omit the name rather than guess.\n\nCONTENT RULES:\n\nKEEP IN: external meetings with named counterparties + outcome, outreach Sales User initiated to a named recipient, workstream progress (decks, white papers, n8n builds, target research), scheduling wins with named targets, conferences, internal strategy sessions with named participants + tangible outcome.\n\nKEEP OUT:\n- Personal items (ballet, school pickups, family)\n- Internal admin (IT, office access) unless it directly unblocks work\n- Meetings Sales User declined\n- Generic 'reviewed doc' without named-counterparty outcome\n- Vague volume claims like 'sent N emails', 'multiple calls today', 'notable outreach burst' - NEVER include email or message counts. Either name the recipient and outcome, or drop the bullet entirely.\n- Executive-voice hype language ('excited to', 'great call with', 'aligned on', 'spearheaded')\n- Past-tense scheduling items already done or already past (do not bullet 'Reschedule X meeting' if that meeting was yesterday)\n\nNEEDS / BLOCKERS - STRICT DEFINITION:\nA 'need' or 'blocker' is something Sales User needs HELP to accomplish, meaning ONE of:\n(a) Someone else owes Sales User something specific (a response, a decision, an intro, access, sign-off), OR\n(b) Sales User is stuck on something and needs a teammate's input to unstick.\n\nDO NOT include in Needs / Blockers:\n- Action items Sales User owns and can do himself ('send X', 'draft Y', 'advance Z', 'follow up with W') - these belong in 'Today', not in 'Needs / Blockers'.\n- Items that are simply next-steps in Sales User's own queue.\n- Past items already resolved or no longer relevant.\n- Items where you cannot identify a specific named person Sales User is waiting on AND specifically what they owe.\n- Items you cannot verify from the source data - DO NOT fabricate or interpret loosely. If unsure, leave out.\n\nPREFER 'None at the moment' over fabricating Needs/Blockers. A real blocker has: (a) a named person who owes Sales User something specific, AND (b) clear evidence in the source data (an open tasks row with explicit 'awaiting X', 'pending from Y', 'blocked by Z', 'need X to do Y' language). Generic ambiguous open tasks rows are NOT blockers.\n\nVOICE: first-person operator. Plain verbs (met with, scoped, locked, pushed, sent). No positioning verbs (spearheaded, drove alignment on, championed). No throat-clearing or hedges.\n\nDATA SOURCES PROVIDED:\n- meetings: federated query across two Notion meeting DBs. 'pairs' = same meeting captured by both; 'CRM_only' = calendar/Notetaker only; 'recall_only' = in-person/HiDock only. Use for 'Yesterday' meeting bullets.\n- calendar_yesterday / calendar_today: filtered Google Calendar events. Use calendar_today for 'Today' meeting bullets. Use calendar_yesterday only as backup if a meeting doesn't appear in 'meetings'.\n- gmail_summary: provides only a count. DO NOT bullet email volume. Skip this field entirely unless you can name a specific recipient and outcome from elsewhere in the data.\n- slack_summary: Sales User's outbound Slack from yesterday. Use to surface external-facing pushes or commitments Sales User made.\n- open_tasks: Example Company Open Tasks DB rows where Status != Done. Use for 'Today' (items Sales User owes/will work on) and for 'Needs / Blockers' (ONLY if the row text explicitly indicates Sales User is waiting on a named someone else). When in doubt, treat as Sales User's own action items for 'Today', not as blockers.\n\nIF DATA IS MISSING for a source (error field present, or empty), note it inline at the BOTTOM of the relevant section as a single italicized line: '_(meetings data unavailable)_'. Continue with what you have.\n\nReturn ONLY the standup text, ready to post to Slack. No JSON, no markdown code fences, no commentary, no lead-in.`;\n\nconst userPrompt = `Source data for ${dates.today_long}:\\n\\n${JSON.stringify(payload, null, 2)}`;\n\nreturn { payload, systemPrompt, userPrompt, dates };"
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000021",
+      "name": "Bundle + build prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1020,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 2000,\n  \"system\": {{ JSON.stringify($json.systemPrompt) }},\n  \"messages\": [{ \"role\": \"user\", \"content\": {{ JSON.stringify($json.userPrompt) }} }]\n}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000022",
+      "name": "Anthropic synthesize",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1240,
+        380
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "name": "REPLACE_WITH_ANTHROPICAPI_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const llm = $input.first().json || {};\nconst dates = $('Bundle + build prompt').first().json.dates;\n\nlet draftText = '';\nlet llmError = null;\ntry {\n  draftText = ((llm.content || []).map(c => c.text || '').join('') || '').trim();\n  draftText = draftText.replace(/^```[a-zA-Z]*\\n?/, '').replace(/\\n?```\\s*$/, '').trim();\n  if (!draftText) throw new Error('empty draft from Anthropic');\n} catch (e) {\n  llmError = e.message;\n  draftText = `_Daily Standup - ${dates.today_long}_\\n\\n_Yesterday_\\n- (LLM synthesis failed: ${llmError}. Manual draft required.)\\n\\n_Today_\\n- (see calendar)\\n\\n_Needs / Blockers_\\n- None at the moment`;\n}\n\nconst slackText = draftText;\n\nreturn { draftText, slackText, llmError, dates };"
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000023",
+      "name": "Parse draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1460,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json; charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"channel\": \"C0B4XU4LHDE\",\n  \"text\": {{ JSON.stringify($json.slackText) }},\n  \"mrkdwn\": true,\n  \"unfurl_links\": false,\n  \"unfurl_media\": false\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000024",
+      "name": "Post to Slack #Sales User-standup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        380
+      ],
+      "credentials": {
+        "slackApi": {
+          "name": "REPLACE_WITH_SLACKAPI_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const draft = $('Parse draft').first().json;\nconst slackResp = $input.first().json || {};\n\nconst posted_ts = slackResp.ts || (slackResp.message && slackResp.message.ts) || null;\nconst slack_ok = !!(slackResp.ok && posted_ts);\nconst slack_error = slack_ok ? null : (slackResp.error || JSON.stringify(slackResp).slice(0, 500));\n\nlet fallback_needed = !slack_ok;\nlet fallback_payload = null;\nif (fallback_needed) {\n  const subject = `[STANDUP FALLBACK ${draft.dates.today_pt}]`;\n  const body = `Slack post failed after 3 retries. Draft below.\\n\\n${draft.draftText}\\n\\n---\\nError details: ${slack_error}`;\n  const raw = [\n    `To: sales.user@example.com`,\n    `From: sales.user@example.com`,\n    `Subject: ${subject}`,\n    `Content-Type: text/plain; charset=UTF-8`,\n    ``,\n    body,\n  ].join('\\r\\n');\n  const b64 = Buffer.from(raw, 'utf-8').toString('base64').replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');\n  fallback_payload = { message: { raw: b64 } };\n}\n\nreturn {\n  slack_ok,\n  posted_ts,\n  slack_error,\n  fallback_needed,\n  fallback_payload,\n  draft_text: draft.draftText,\n  llm_error: draft.llmError,\n  dates: draft.dates,\n};"
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000025",
+      "name": "Verify + plan fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "REPLACE_WITH_WORKFLOW_ID",
+              "leftValue": "={{ $json.fallback_needed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000026",
+      "name": "Need fallback?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2120,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.fallback_payload) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000027",
+      "name": "Create Gmail fallback draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2340,
+        280
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const verify = $('Verify + plan fallback').first().json;\nconst draftSummary = {\n  date: verify.dates.today_pt,\n  slack_ok: verify.slack_ok,\n  slack_ts: verify.posted_ts,\n  slack_error: verify.slack_error,\n  llm_error: verify.llm_error,\n  fallback_needed: verify.fallback_needed,\n  draft_preview: (verify.draft_text || '').slice(0, 2000),\n  generated_at: new Date().toISOString(),\n};\nlet fallback_result = null;\ntry {\n  const fb = $('Create Gmail fallback draft').first();\n  if (fb && fb.json) fallback_result = { draft_id: fb.json.id, message_id: (fb.json.message || {}).id };\n} catch (e) {}\nreturn { ...draftSummary, fallback_result };"
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000028",
+      "name": "Aggregate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2560,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000029",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2780,
+        380
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Compute dates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mon-Fri 6:30am PT": {
+      "main": [
+        [
+          {
+            "node": "Compute dates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute dates": {
+      "main": [
+        [
+          {
+            "node": "Pull federated meetings",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Pull Calendar",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Pull Gmail sent",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Pull Slack from Sales User",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Pull Open Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pull federated meetings": {
+      "main": [
+        [
+          {
+            "node": "Wait all pulls",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pull Calendar": {
+      "main": [
+        [
+          {
+            "node": "Wait all pulls",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Pull Gmail sent": {
+      "main": [
+        [
+          {
+            "node": "Wait all pulls",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Pull Slack from Sales User": {
+      "main": [
+        [
+          {
+            "node": "Wait all pulls",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Pull Open Tasks": {
+      "main": [
+        [
+          {
+            "node": "Wait all pulls",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Wait all pulls": {
+      "main": [
+        [
+          {
+            "node": "Bundle + build prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bundle + build prompt": {
+      "main": [
+        [
+          {
+            "node": "Anthropic synthesize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic synthesize": {
+      "main": [
+        [
+          {
+            "node": "Parse draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse draft": {
+      "main": [
+        [
+          {
+            "node": "Post to Slack #Sales User-standup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to Slack #Sales User-standup": {
+      "main": [
+        [
+          {
+            "node": "Verify + plan fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify + plan fallback": {
+      "main": [
+        [
+          {
+            "node": "Need fallback?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Need fallback?": {
+      "main": [
+        [
+          {
+            "node": "Create Gmail fallback draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Gmail fallback draft": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 600,
+    "timezone": "America/Los_Angeles"
+  },
+  "staticData": {
+    "node:Mon-Fri 6:30am PT": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "tags": []
+}

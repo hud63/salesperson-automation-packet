@@ -1,0 +1,533 @@
+{
+  "updatedAt": "2026-05-25T17:01:25.326Z",
+  "createdAt": "2026-05-22T18:51:21.061Z",
+  "id": "REPLACE_WITH_WORKFLOW_ID",
+  "name": "Sales Thread Closure Detector",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-closure-detect",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "sales-thread-closure-detector-webhook"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 5 * * *"
+            }
+          ]
+        }
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000030",
+      "name": "Daily 5am PT",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/data_sources/REPLACE_WITH_DATA_SOURCE_ID/query",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"page_size\": 100,\n  \"filter\": {\n    \"or\": [\n      { \"property\": \"Status\", \"status\": { \"equals\": \"Not started\" } },\n      { \"property\": \"Status\", \"status\": { \"equals\": \"In progress\" } }\n    ]\n  }\n}",
+        "options": {}
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000002",
+      "name": "Get Open AIs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        200
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=30&q={{ encodeURIComponent('from:sales.user@example.com newer_than:7d') }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "options": {}
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000003",
+      "name": "List sent emails",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        300
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=30&q={{ encodeURIComponent('to:sales.user@example.com in:inbox newer_than:7d') }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "options": {}
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000004",
+      "name": "List inbox emails",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        400
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://slack.com/api/search.messages?query={{ encodeURIComponent('<@REPLACE_WITH_SLACK_USER_ID> OR from:@REPLACE_WITH_SLACK_USER_ID after:' + new Date(Date.now() - 7 * 86400000).toISOString().slice(0,10)) }}&sort=timestamp&sort_dir=desc&count=50",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "options": {}
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000005",
+      "name": "Search Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        500
+      ],
+      "credentials": {
+        "slackApi": {
+          "name": "REPLACE_WITH_SLACKAPI_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 4,
+        "options": {}
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000040",
+      "name": "Merge all inputs",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        560,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Build a single LLM prompt with all context. Items come in via Merge.\n// items[0]=Open AIs, items[1]=sent emails, items[2]=inbox, items[3]=Slack\nconst items = $input.all();\nconst openTasks = items[0] && items[0].json || {};\nconst sentEmails = items[1] && items[1].json || {};\nconst inboxEmails = items[2] && items[2].json || {};\nconst slack = items[3] && items[3].json || {};\n\n// Format open AIs\nfunction extractText(prop) {\n  if (!prop) return '';\n  if (prop.title) return prop.title.map(t => t.plain_text || '').join('');\n  if (prop.rich_text) return prop.rich_text.map(t => t.plain_text || '').join('');\n  return '';\n}\n\nconst openAis = (openTasks.results || []).map(p => {\n  const props = p.properties || {};\n  return {\n    id: p.id,\n    task: extractText(props.Task),\n    source: extractText(props.Source),\n    notes: extractText(props.Notes).slice(0, 1500),\n    status: (props.Status && props.Status.status && props.Status.status.name) || '',\n    created: p.created_time,\n    url: p.url,\n  };\n});\n\nif (openAis.length === 0) {\n  return [{ json: { skip: true, reason: 'no open AIs to evaluate' } }];\n}\n\n// Format email lists as just subject + ts (the LLM does the heavy lifting)\nconst sentList = (sentEmails.messages || []).slice(0, 20).map(m => ({ id: m.id, thread: m.threadId }));\nconst inboxList = (inboxEmails.messages || []).slice(0, 20).map(m => ({ id: m.id, thread: m.threadId }));\nconst slackMessages = (slack.messages && slack.messages.matches) || [];\nconst slackList = slackMessages.slice(0, 30).map(m => ({\n  ts: m.ts,\n  channel: (m.channel && m.channel.name) || (m.channel && m.channel.id) || '?',\n  user: m.username || m.user || '?',\n  text: (m.text || '').slice(0, 400),\n  permalink: m.permalink,\n}));\n\nreturn [{ json: { openAis, sentList, inboxList, slackList } }];"
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000006",
+      "name": "Assemble context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        620,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Build the LLM prompt. Email bodies are NOT fetched here to keep context small \u2014\n// the LLM only needs Slack text snippets + the open AIs themselves. Email signals\n// will be added in v2 once we know which AIs need deeper email forensics.\n\nif ($json.skip) return $json;\n\nconst { openAis, slackList } = $json;\n\nconst aisFormatted = openAis.map((a, i) => `[${i}] id=${a.id}\\n  task: ${a.task}\\n  source: ${a.source}\\n  created: ${a.created}\\n  notes: ${a.notes.slice(0, 600)}`).join('\\n\\n');\n\nconst slackFormatted = slackList.map(s => `[${s.ts.slice(0, 10)}] #${s.channel} from ${s.user}: ${s.text}`).join('\\n');\n\nconst prompt = `You are evaluating which open action items (AIs) have been COMPLETED, based on recent activity.\n\nToday's date: ${new Date().toISOString().slice(0, 10)}\n\nOPEN ACTION ITEMS (${openAis.length}):\n\n${aisFormatted}\n\n---\n\nRECENT SLACK ACTIVITY (last 7 days, ${slackList.length} messages):\n\n${slackFormatted}\n\n---\n\nFor each open AI, decide its status. Possible signals of completion:\n- Sales User's outbound Slack message mentioning the deliverable as sent/done\n- Owner's message confirming completion\n- Subsequent message that supersedes or cancels the AI (\"don't worry about it\", \"never mind\")\n- AI is now clearly stale or no longer relevant\n\nIMPORTANT: only mark status=\"done\" or \"cancelled\" if you have HIGH CONFIDENCE based on explicit evidence in the activity. Do NOT guess.\n\nReturn ONLY JSON:\n{\n  \"evaluations\": [\n    {\n      \"ai_id\": \"<notion page id>\",\n      \"status\": \"done\" | \"cancelled\" | \"open\",\n      \"confidence\": 0.0,\n      \"reason\": \"<one sentence justification>\",\n      \"evidence\": \"<short quote or permalink, optional>\"\n    }\n  ]\n}\n\nOnly evaluations with status != \"open\" need to be high-quality. Items still open can be brief.\nOnly emit done/cancelled with confidence >= 0.7. Below that, leave as open.`;\n\nreturn { openAis, prompt };"
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000007",
+      "name": "Build prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-haiku-4-5\",\n  \"max_tokens\": 4000,\n  \"messages\": [{ \"role\": \"user\", \"content\": {{ JSON.stringify($json.prompt) }} }]\n}",
+        "options": {}
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000008",
+      "name": "Anthropic evaluate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1060,
+        350
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "name": "REPLACE_WITH_ANTHROPICAPI_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Parse LLM, emit one item per AI that should be updated.\nconst input = $input.first().json;\nconst openAis = $('Build prompt').first().json.openAis || [];\n\nlet parsed = null;\nlet error = null;\ntry {\n  const text = (input.content || []).map(c => c.text || '').join('');\n  const m = text.match(/\\{[\\s\\S]*\\}/);\n  if (!m) throw new Error('no JSON in LLM response');\n  parsed = JSON.parse(m[0]);\n} catch (e) {\n  error = e.message;\n}\n\nif (error || !parsed) {\n  // Emit no items so Update node doesn't fire\n  return [];\n}\n\nconst evaluations = parsed.evaluations || [];\nconst statusMap = { done: 'Done', cancelled: 'Done', open: null };  // 'cancelled' also flips to Done for v1\n\nconst toUpdate = [];\nfor (const ev of evaluations) {\n  const newStatus = statusMap[ev.status];\n  if (!newStatus) continue;\n  if (!ev.confidence || ev.confidence < 0.7) continue;\n  toUpdate.push({\n    ai_id: ev.ai_id,\n    new_status: newStatus,\n    confidence: ev.confidence,\n    reason: ev.reason,\n    evidence: ev.evidence,\n    original_status_decision: ev.status,\n  });\n}\n\n// Emit ONLY high-confidence closures; if none, emit nothing (Update Open Task won't fire)\nreturn toUpdate.map(u => ({ json: u }));"
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000009",
+      "name": "Parse + filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.notion.com/v1/pages/{{ $json.ai_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2025-09-03"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { Status: { status: { name: $json.new_status } } } }) }}",
+        "options": {}
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000010",
+      "name": "Update Open Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1480,
+        350
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "numberInputs": 2,
+        "options": {}
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000050",
+      "name": "Sync merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1480,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Aggregate: count actual closures applied (Update Open Task outputs),\n// plus include the full LLM evaluation for transparency.\nlet updates = [];\ntry { updates = $('Update Open Task').all().map(i => i.json).filter(j => j && j.object === 'page'); } catch (e) { /* Update node didn't run */ }\nconst evaluationsText = (($('Anthropic evaluate').first().json.content || []).map(c => c.text || '').join(''));\n\nlet parsedEvals = null;\ntry {\n  const m = evaluationsText.match(/\\{[\\s\\S]*\\}/);\n  if (m) parsedEvals = JSON.parse(m[0]);\n} catch (e) {}\n\nconst totalEvaluated = parsedEvals && parsedEvals.evaluations ? parsedEvals.evaluations.length : 0;\nconst closuresApplied = updates.length;\n\nreturn { summary: { total_evaluated: totalEvaluated, closures_applied: closuresApplied, generated_at: new Date().toISOString() }, updates_applied: updates.map(u => ({ id: u.id, url: u.url })), raw_evaluations: parsedEvals };"
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000011",
+      "name": "Aggregate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "e5f5e5f5-0001-0000-0000-000000000012",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1880,
+        350
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Open AIs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "List sent emails",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "List inbox emails",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily 5am PT": {
+      "main": [
+        [
+          {
+            "node": "Get Open AIs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "List sent emails",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "List inbox emails",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Open AIs": {
+      "main": [
+        [
+          {
+            "node": "Merge all inputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List sent emails": {
+      "main": [
+        [
+          {
+            "node": "Merge all inputs",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "List inbox emails": {
+      "main": [
+        [
+          {
+            "node": "Merge all inputs",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Search Slack": {
+      "main": [
+        [
+          {
+            "node": "Merge all inputs",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Merge all inputs": {
+      "main": [
+        [
+          {
+            "node": "Assemble context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble context": {
+      "main": [
+        [
+          {
+            "node": "Build prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build prompt": {
+      "main": [
+        [
+          {
+            "node": "Anthropic evaluate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic evaluate": {
+      "main": [
+        [
+          {
+            "node": "Parse + filter",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Sync merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Parse + filter": {
+      "main": [
+        [
+          {
+            "node": "Update Open Task",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Open Task": {
+      "main": [
+        [
+          {
+            "node": "Sync merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sync merge": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "executionTimeout": 600,
+    "timezone": "America/Los_Angeles"
+  },
+  "staticData": {
+    "node:Daily 5am PT": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "tags": []
+}

@@ -1,0 +1,1236 @@
+{
+  "updatedAt": "2026-05-18T17:41:07.389Z",
+  "createdAt": "2026-05-11T04:13:43.983Z",
+  "id": "REPLACE_WITH_WORKFLOW_ID",
+  "name": "Email Reply Draft Assistant",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2208,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "email-auto-draft-test",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Webhook Test",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -2208,
+        -80
+      ],
+      "webhookId": "email-reply-draft-assistant-webhook"
+    },
+    {
+      "parameters": {
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "in:inbox -from:me -from:sales.user@example.com -from:sales.user@example.com newer_than:1d"
+            },
+            {
+              "name": "maxResults",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Test: List Recent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2000,
+        -160
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst first = (data.messages || [])[0];\nif (!first) {\n  throw new Error('No messages found matching test query');\n}\nreturn [{ json: { messageId: first.id, threadId: first.threadId } }];"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Test: Extract ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1808,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://gmail.googleapis.com/gmail/v1/users/me/messages/{{ $json.messageId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "format",
+              "value": "full"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Fetch Full Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1600,
+        -160
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\nconst hasFullPayload = item.payload && (item.payload.parts || (item.payload.body && item.payload.body.size));\n\nlet from = '', to = '', cc = '', replyTo = '', subject = '', body = '';\nlet headers = {};\n\nif (hasFullPayload) {\n  headers = (item.payload?.headers || []).reduce((acc, h) => {\n    acc[h.name.toLowerCase()] = h.value;\n    return acc;\n  }, {});\n  from = headers.from || '';\n  to = headers.to || '';\n  cc = headers.cc || '';\n  replyTo = headers['reply-to'] || '';\n  subject = headers.subject || '';\n\n  function b64decode(s) {\n    return Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8');\n  }\n  function htmlToText(html) {\n    return html\n      .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n      .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n      .replace(/<br\\s*\\/?>/gi, '\\n')\n      .replace(/<\\/p>/gi, '\\n\\n')\n      .replace(/<[^>]+>/g, ' ')\n      .replace(/&nbsp;/g, ' ')\n      .replace(/&amp;/g, '&')\n      .replace(/&lt;/g, '<')\n      .replace(/&gt;/g, '>')\n      .replace(/&quot;/g, '\"')\n      .replace(/&#39;/g, \"'\")\n      .replace(/\\n{3,}/g, '\\n\\n')\n      .replace(/[ \\t]+/g, ' ')\n      .trim();\n  }\n  function extract(payload, preferred) {\n    if (!payload) return '';\n    if (payload.mimeType?.startsWith(preferred) && payload.body?.data) {\n      const decoded = b64decode(payload.body.data);\n      return preferred === 'text/html' ? htmlToText(decoded) : decoded;\n    }\n    if (payload.parts) {\n      for (const p of payload.parts) {\n        const t = extract(p, preferred);\n        if (t) return t;\n      }\n    }\n    return '';\n  }\n  body = extract(item.payload, 'text/plain') || extract(item.payload, 'text/html') || item.snippet || '';\n} else {\n  from = item.From || item.from || '';\n  to = item.To || item.to || '';\n  cc = item.Cc || item.cc || '';\n  subject = item.Subject || item.subject || '';\n  body = item.snippet || '';\n}\n\nconst listUnsubscribe = headers['list-unsubscribe'] || '';\nconst autoSubmitted = headers['auto-submitted'] || '';\nconst precedence = headers.precedence || '';\nconst messageIdHeader = headers['message-id'] || '';\nconst references = headers.references || '';\nconst receivedAt = headers.date || (item.internalDate ? new Date(parseInt(item.internalDate)).toISOString() : null);\n\nconst skipReasons = [];\nif (!from) skipReasons.push('no sender');\nif (!body || body.length < 20) skipReasons.push('empty/tiny body');\nif (/no-?reply|donotreply|notifications?@|noreply/i.test(from)) skipReasons.push('noreply sender');\nif (listUnsubscribe) skipReasons.push('mailing list');\nif (autoSubmitted && autoSubmitted !== 'no') skipReasons.push('auto-submitted');\nif (precedence && /bulk|list|junk/i.test(precedence)) skipReasons.push('bulk precedence');\nif (/Sales User@example-company\\.ai|sales.user@example-company\\.ai|Sales User@Sales UserSales User\\.com/i.test(from)) skipReasons.push('from Sales User');\nif (/calendar-notification@google\\.com/i.test(from)) skipReasons.push('calendar invite');\n\nif (skipReasons.length > 0) {\n  return [{ json: { skip: true, skipReasons: skipReasons.join(', '), messageId: item.id, threadId: item.threadId, from, subject } }];\n}\n\nconst emailMatch = from.match(/<([^>]+)>/) || [null, from];\nconst senderEmail = (emailMatch[1] || from).trim();\nconst senderHandle = senderEmail.split('@')[0] || '';\nconst senderName = from.replace(/<[^>]+>/, '').replace(/\"/g, '').trim();\n\nreturn [{ json: {\n  skip: false,\n  messageId: item.id,\n  threadId: item.threadId,\n  rfcMessageId: messageIdHeader,\n  references,\n  from,\n  to,\n  cc,\n  replyTo,\n  subject,\n  receivedAt,\n  body: body.substring(0, 6000),\n  senderEmail,\n  senderHandle,\n  senderName\n} }];\n"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Filter & Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1408,
+        -320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "If Not Skipped",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1200,
+        -320
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://gmail.googleapis.com/gmail/v1/users/me/threads/{{ $json.threadId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "format",
+              "value": "metadata"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Get Thread",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1008,
+        -400
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://slack.com/api/search.messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "=\"{{ $('Filter & Normalize').first().json.senderName }}\" after:{{ $now.minus({days:30}).toFormat('yyyy-MM-dd') }}"
+            },
+            {
+              "name": "count",
+              "value": "10"
+            },
+            {
+              "name": "sort",
+              "value": "timestamp"
+            },
+            {
+              "name": "sort_dir",
+              "value": "desc"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Get Slack Context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -800,
+        -400
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "slackApi": {
+          "name": "REPLACE_WITH_SLACKAPI_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/databases/REPLACE_WITH_DATABASE_ID/query",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"page_size\": 100}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Get Dismissed Patterns",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -608,
+        -400
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Filter & Normalize').first().json;\nconst thread = $('Get Thread').first().json;\nconst slack = $('Get Slack Context').first().json;\nconst senderThreads = $('Get Sender Threads').first().json;\nconst dismissed = $('Get Dismissed Patterns').first().json;\nconst calendar = $('Get Calendar Availability').first().json;\nconst exemplars = ($('Fetch Sent Bodies').first().json.exemplars) || [];\nconst openSlotsData = $('Compute Open Slots').first().json;\n\nconst threadMessages = (thread.messages || [])\n  .filter(m => m.id !== original.messageId)\n  .map(m => {\n    const h = (m.payload?.headers || []).reduce((acc, x) => { acc[x.name.toLowerCase()] = x.value; return acc; }, {});\n    return {\n      from: h.from || '',\n      date: h.date || '',\n      snippet: (m.snippet || '').substring(0, 500)\n    };\n  })\n  .slice(-5);\n\nconst slackMessages = ((slack.messages && slack.messages.matches) || [])\n  .slice(0, 8)\n  .map(m => `[${m.channel?.name || m.channel?.id || '?'}] ${m.username || m.user || '?'}: ${(m.text || '').substring(0, 300)}`)\n  .join('\\n');\n\n// Cross-thread context: other recent Gmail threads with this sender, current thread excluded.\nconst otherThreads = (senderThreads.threads || [])\n  .filter(t => t.id !== original.threadId)\n  .slice(0, 6)\n  .map(t => `[thread ${t.id}] ${(t.snippet || '').substring(0, 350)}`)\n  .join('\\n\\n');\n\nconst patterns = ((dismissed.results) || [])\n  .map(p => {\n    const props = p.properties || {};\n    const titleProp = Object.values(props).find(v => v.type === 'title');\n    return titleProp?.title?.[0]?.plain_text || '';\n  })\n  .filter(Boolean)\n  .slice(0, 30);\n\nconst busy = ((calendar.calendars?.primary?.busy) || []).slice(0, 50);\nconst fmtPT = (iso) => {\n  const d = new Date(iso);\n  return d.toLocaleString('en-US', {\n    timeZone: 'America/Los_Angeles',\n    weekday: 'short',\n    month: 'short',\n    day: 'numeric',\n    hour: 'numeric',\n    minute: '2-digit',\n    hour12: true\n  });\n};\nconst busyFormatted = busy.map(b => `${fmtPT(b.start)} to ${fmtPT(b.end)} PT`).join('\\n');\n\nconst exemplarsFormatted = exemplars.map((e, i) => `--- Exemplar ${i+1} ---\\nSubject: ${e.subject}\\nTo: ${e.to}\\nDate: ${e.date}\\n\\n${e.body}`).join('\\n\\n');\n\nconst todayPT = new Date().toLocaleString('en-US', {\n  timeZone: 'America/Los_Angeles',\n  weekday: 'long',\n  month: 'long',\n  day: 'numeric',\n  year: 'numeric'\n});\n\nconst prompt = `You are Sales User's email assistant. Sales User is Director of Business Development at sample_company (mission-critical infrastructure practice; energy and data centers). He reports to Executive Stakeholder.\n\nSales User'S WRITING STYLE (mandatory):\n- STUDY THE VOICE EXEMPLARS section below carefully. Those are Sales User's actual recent sent emails. Match his tone, paragraph rhythm, openings, sign-offs, and characteristic phrasings. The exemplars are the ground truth for \"how Sales User writes.\" The hard rules below are absolute; the exemplars fill in the texture between them.\n- Lead with conclusion, then support with details (Pyramid Principle).\n- Plain text only. No markdown. No bullet dashes inside paragraphs.\n- Never use em dashes. Use semicolons or commas. Comma before \"but\" in compound sentences.\n- Short paragraphs, active voice.\n- Drop closing summary sentences. End with the action line.\n- Do NOT use recruiter-cadence asks (\"Worth 30 minutes?\"). Phrase call asks as interest plus schedule flex.\n- Inline parenthetical clarifications, not footnotes.\n- Use \"Recurrent\" not \"Recurrent Energy\" after first mention.\n- For multi-recipient intros, open with \"Thanks, [introducer].\" then pivot in paragraph two with \"[New contact], good to meet you.\" Do not double-greet.\n- Use the broadest accurate scope in cold outreach (\"infrastructure projects\" beats \"power and data center mega-projects\").\n\nCROSS-THREAD CONTEXT (mandatory; override anything else):\n- The PRIOR THREAD section shows only the current Gmail thread. Sales User often has parallel threads with the same sender (e.g., scheduling in one thread, project context in another, a Teams link in a third).\n- OTHER RECENT EMAIL THREADS WITH THIS SENDER contains snippets from those parallel threads. Read them before deciding what's missing.\n- If those snippets suggest a meeting time, agenda, action item, or commitment may already exist with this person, do NOT write a draft that claims \"I don't see X in the thread\" or asks Sales User to restate something already established elsewhere.\n- When the current message only makes sense in light of another thread (e.g., sender sends a meeting link with no time because the time lives in a different thread), the correct draft is a short acknowledgment (\"Thanks, got the link, see you then\") or a deferral (\"Confirming the time we discussed, looking forward\"), not a question that exposes the assistant's narrow view.\n- If you genuinely cannot tell from cross-thread snippets whether context exists, default to a soft acknowledgment Sales User can flesh out; never invent a contradiction.\n\nWARM INTRO RULE (mandatory; override anything else):\n- If this email is a warm introduction where Sales User is the principal being introduced (typical signal: Executive, a colleague, or any other party introduces Sales User to one or more external contacts; Sales User is named and described as the relevant person; the email is addressed TO at least one external party with Sales User on the To: line), then needs_reply is ALWAYS true regardless of whether scheduling is delegated to assistants or coordinators on either side.\n- The correct draft is a SHORT reply-all acknowledgment in Sales User's voice. Open with \"Thanks, [introducer].\" then a fresh paragraph \"[Lead external contact(s)], good to meet you.\" then ONE line of soft engagement, max (\"Looking forward to the conversation.\"). Do NOT name the coordinators or assistants in the body of the reply; the cc'd coordinators handle scheduling on their own without being called out by Sales User. Sales User wants room to add his own one-liner of personalization, so keep the draft minimal.\n- Do NOT propose specific times in the draft when scheduling is delegated. Let the coordinators run the calendar.\n- Do NOT skip the ack just because scheduling has been handed off to assistants. The ack is the social signal that Sales User is engaged. Skipping it reads as rude.\n- If multiple external contacts are introduced, address them in the order they appear in the original email's To: line; do not single one out unless prior context clearly justifies it.\n\nSCHEDULING RULES (mandatory; override anything else):\n- A pre-computed OPEN SLOTS list and a VIMCAL booking link are provided below. When proposing times, use the OPEN SLOTS list verbatim. Do not invent times. Do not recompute. The OPEN SLOTS already respect Sales User's working hours, busy blocks, and the 24-hour-in-the-future minimum.\n- Use the JOEL TEMPLATE (see below) when the incoming email is a direct scheduling request from a peer or counterparty AND scheduling has NOT been delegated to an assistant on either side. Format: short conversational lead (\"No problem\", \"Happy to find time\", \"Next week works well\", etc.), then a list of 2-3 day options drawn from OPEN SLOTS (use the exact day labels and time ranges), then signature. If a VIMCAL BOOKING LINK is provided below (non-empty), add the line \"If it's easier, you can click on a slot below to book:\" followed by the link, BEFORE the signature. If the VIMCAL BOOKING LINK is empty, omit that line entirely.\n- Do NOT use the JOEL TEMPLATE for warm intros where coordinators are cc'd to schedule (the WARM INTRO RULE above takes precedence).\n- Do NOT propose times outside the OPEN SLOTS list.\n- Do NOT propose specific times if OPEN SLOTS is empty; default to schedule flex instead (\"Happy to work around your calendar; what does next week look like on your end?\").\n- All other scheduling guardrails still apply:\n- Today is ${todayPT} Pacific Time.\n- Sales User's working hours: 8:00 AM to 6:00 PM Pacific, Monday through Friday only.\n- NEVER propose a specific time unless: (a) it is clearly free on Sales User's calendar, AND (b) it falls within working hours, AND (c) it is at least 24 hours in the future.\n- NEVER propose times before 7:00 AM Pacific or after 7:00 PM Pacific, regardless of the sender's timezone, even if the sender suggested it.\n- If sender proposes a specific time that is OUTSIDE Sales User's working hours (e.g. 11 AM CET = 2 AM PT), do NOT confirm it. Counter with working-hours options, or offer schedule flex.\n- Default behavior when unsure: offer schedule flex without proposing specific times. Example: \"Happy to work around your calendar; what does the week of <month day> look like on your end?\"\n- When proposing specific times, lead with Pacific Time and add the sender's local time in parens if known (e.g., \"Tuesday May 19 at 9:00 AM Pacific (6:00 PM CET)\").\n\nSIGNATURE (always append on sample_company account):\nSales User\nDirector | sample_company\n650-238-7831\n\nABOUT Sales User (grounding):\n15+ years energy, 4+ GW delivered, $5B+ capital. Prior stops: SunEdison, Tesla, Recurrent Energy, then General Catalyst EnergyCo. Marine veteran. PMP. Patent holder thin-film PV. Practitioner-first: \"operators with real reps, developers with scars.\" Recurring themes: energy and AI collide at scale, natural gas as part of the clean stack for reliability.\n\nABOUT ZEROFRI:\nExecutive Stakeholder's firm. Power services rollup thesis (solar/BESS O&M plus electrical contractors). Sales User leads mission-critical infrastructure BD; primary BD goal is winning owner's rep engagements on power and data center builds.\n\n----\n\nSales User'S CALENDAR (busy blocks, next 14 days, Pacific Time):\n${busyFormatted || '(no busy blocks returned; treat calendar as unknown and DEFAULT to schedule flex, do not propose specific times)'}\n\n----\n\nSales User'S RECENT VOICE EXEMPLARS (last 30 days of sent email; study these for tone, paragraph rhythm, phrasing, and characteristic openings/sign-offs. These are ground truth for Sales User's voice):\n${exemplarsFormatted || '(no exemplars available for this run; rely on the WRITING STYLE rules above)'}\n\n----\n\nOPEN SLOTS (next 14 days, working hours, busy blocks already excluded; PT):\n${openSlotsData.openSlotsFormatted}\n\nVIMCAL BOOKING LINK (use only when applying the JOEL TEMPLATE; if empty, omit the link line):\n${openSlotsData.vimcalLink || '(not configured)'}\n\n----\n\nINCOMING EMAIL\nFrom: ${original.from}\nSubject: ${original.subject}\nReceived: ${original.receivedAt}\n\nBody:\n${original.body}\n\nPRIOR THREAD (oldest to newest, excluding current message):\n${threadMessages.length > 0 ? threadMessages.map(m => `[${m.date}] ${m.from}\\n${m.snippet}`).join('\\n\\n') : '(none; first message in thread)'}\n\nOTHER RECENT EMAIL THREADS WITH THIS SENDER (last 30 days, current thread excluded; snippets only):\n${otherThreads || '(none found)'}\n\nRECENT SLACK MENTIONS OF SENDER (last 30 days):\n${slackMessages || '(none found)'}\n\nDISMISSED EMAIL PATTERNS (skip if sender or topic matches):\n${patterns.length > 0 ? patterns.join('\\n') : '(none)'}\n\nTASK:\nDecide if this email needs a personalized reply from Sales User.\n\nSkip if: newsletter, automated notification, marketing, calendar invite, FYI/BCC with no expectation of reply, or matches a dismissed pattern.\nDraft if: personal request, question, business inquiry, intro reply, scheduling, or any peer-level conversation.\n\nReturn ONLY a JSON object, no preamble, no code fences:\n{\n  \"needs_reply\": true | false,\n  \"category\": \"BD outreach\" | \"Intro/Networking\" | \"Internal\" | \"Scheduling\" | \"Vendor\" | \"Press/Podcast\" | \"Personal\" | \"Newsletter\" | \"Notification\" | \"Other\",\n  \"urgency\": \"high\" | \"medium\" | \"low\",\n  \"confidence\": 0.0-1.0,\n  \"reasoning\": \"one sentence why\",\n  \"draft\": \"the full reply body with signature, or empty string if needs_reply is false\"\n}\n\nIf you have low context, draft a short genuine acknowledgment Sales User can flesh out (do not invent specifics).`;\n\nreturn [{ json: { prompt } }];\n"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Build Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -208,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt }}"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Classify + Draft",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.6,
+      "position": [
+        0,
+        -400
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "claude-sonnet-4-5-20250929",
+          "mode": "list",
+          "cachedResultName": "claude-sonnet-4-5"
+        },
+        "options": {
+          "maxTokensToSample": 2000,
+          "temperature": 0.4
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Claude Sonnet 4.5",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        -240
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "name": "REPLACE_WITH_ANTHROPICAPI_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json.text || $input.first().json.output || $input.first().json.response || $input.first().json;\nconst rawStr = typeof raw === 'string' ? raw : JSON.stringify(raw);\n\nlet parsed;\ntry {\n  const cleaned = rawStr.replace(/^```json\\s*/i, '').replace(/^```\\s*/, '').replace(/```\\s*$/, '').trim();\n  const match = cleaned.match(/\\{[\\s\\S]*\\}/);\n  parsed = JSON.parse(match ? match[0] : cleaned);\n} catch (e) {\n  parsed = { needs_reply: false, category: 'Other', urgency: 'low', confidence: 0, reasoning: 'JSON parse failed: ' + e.message, draft: '' };\n}\n\nconst original = $('Filter & Normalize').first().json;\nconst draftText = (parsed.draft || '').trim();\nconst draftViable = !!parsed.needs_reply && draftText.length >= 30;\n\nreturn [{ json: {\n  needs_reply: !!parsed.needs_reply,\n  draft_viable: draftViable,\n  category: parsed.category || 'Other',\n  urgency: parsed.urgency || 'low',\n  confidence: parsed.confidence ?? 0,\n  reasoning: parsed.reasoning || '',\n  draft: draftText,\n  messageId: original.messageId,\n  threadId: original.threadId,\n  rfcMessageId: original.rfcMessageId,\n  references: original.references,\n  from: original.from,\n  to: original.to,\n  cc: original.cc,\n  replyTo: original.replyTo,\n  subject: original.subject,\n  receivedAt: original.receivedAt,\n  raw_llm_output: rawStr.substring(0, 1500)\n} }];"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Parse Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.draft_viable }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "id": "dadc9b21-204d-4f11-a534-45416275122a"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "If Draft Viable",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        400,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\n\n// Reply-all recipient assembly. Standard email-client behavior:\n//   To: original Reply-To (or From) PLUS any other addresses on the original To: line, minus self\n//   Cc: original Cc, minus self\n// Self addresses are stripped so Sales User never emails himself.\n\nconst SELF_PATTERNS = [\n  /sales\\.user@example\\.com/i,\n];\n\nfunction isSelf(addr) {\n  return SELF_PATTERNS.some(re => re.test(addr));\n}\n\n// Parse a comma-separated address string into address objects.\n// Splitter respects commas inside quotes and angle brackets.\nfunction parseAddressList(s) {\n  if (!s) return [];\n  const out = [];\n  let cur = '';\n  let inQuote = false, inAngle = 0;\n  for (const ch of s) {\n    if (ch === '\"') inQuote = !inQuote;\n    else if (ch === '<') inAngle++;\n    else if (ch === '>') inAngle--;\n    if (ch === ',' && !inQuote && inAngle === 0) {\n      if (cur.trim()) out.push(cur.trim());\n      cur = '';\n    } else {\n      cur += ch;\n    }\n  }\n  if (cur.trim()) out.push(cur.trim());\n  return out;\n}\n\nfunction extractEmail(addr) {\n  const m = addr.match(/<([^>]+)>/);\n  return (m ? m[1] : addr).trim().toLowerCase();\n}\n\n// Build To: list. Start from Reply-To (if present) else From. Add original To minus self.\nconst fromOrReply = (item.replyTo && item.replyTo.trim()) ? item.replyTo : item.from;\nconst originalTo = parseAddressList(item.to || '');\nconst originalCc = parseAddressList(item.cc || '');\n\nconst toListRaw = [fromOrReply, ...originalTo];\n// Dedupe by email and drop self.\nconst seenTo = new Set();\nconst toList = [];\nfor (const addr of toListRaw) {\n  if (!addr) continue;\n  const email = extractEmail(addr);\n  if (!email) continue;\n  if (isSelf(addr)) continue;\n  if (seenTo.has(email)) continue;\n  seenTo.add(email);\n  toList.push(addr);\n}\n\nconst ccList = [];\nconst seenCc = new Set();\nfor (const addr of originalCc) {\n  const email = extractEmail(addr);\n  if (!email) continue;\n  if (isSelf(addr)) continue;\n  if (seenTo.has(email)) continue; // already in To\n  if (seenCc.has(email)) continue;\n  seenCc.add(email);\n  ccList.push(addr);\n}\n\nconst subject = item.subject.startsWith('Re:') ? item.subject : `Re: ${item.subject}`;\n\nconst headerLines = [];\nheaderLines.push(`To: ${toList.join(', ')}`);\nif (ccList.length > 0) headerLines.push(`Cc: ${ccList.join(', ')}`);\nheaderLines.push(`Subject: ${subject.replace(/[\\r\\n]/g, ' ')}`);\nif (item.rfcMessageId) {\n  headerLines.push(`In-Reply-To: ${item.rfcMessageId}`);\n  const refs = item.references ? `${item.references} ${item.rfcMessageId}` : item.rfcMessageId;\n  headerLines.push(`References: ${refs}`);\n}\nheaderLines.push('MIME-Version: 1.0');\nheaderLines.push('Content-Type: text/plain; charset=UTF-8');\nheaderLines.push('');\nheaderLines.push(item.draft);\n\nconst mime = headerLines.join('\\r\\n');\nconst raw = Buffer.from(mime, 'utf-8').toString('base64').replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '');\n\nreturn [{ json: { ...item, raw, threadId: item.threadId, replyToAddresses: toList, replyCcAddresses: ccList } }];\n"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Build MIME",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        608,
+        -480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"message\": {\"raw\": \"{{ $json.raw }}\", \"threadId\": \"{{ $json.threadId }}\"}}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Create Gmail Draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        -480
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/calendar/v3/freeBusy",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"timeMin\": \"{{ $now.toISO() }}\", \"timeMax\": \"{{ $now.plus({days:14}).toISO() }}\", \"timeZone\": \"America/Los_Angeles\", \"items\": [{\"id\": \"primary\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Get Calendar Availability",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -400,
+        -400
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "name": "REPLACE_WITH_GOOGLECALENDAROAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/threads",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "=(from:{{ $('Filter & Normalize').first().json.senderEmail }} OR to:{{ $('Filter & Normalize').first().json.senderEmail }}) newer_than:30d"
+            },
+            {
+              "name": "maxResults",
+              "value": "10"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Get Sender Threads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -704,
+        -560
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "email-auto-draft-pubsub",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": false
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Pub/Sub Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -2400,
+        -400
+      ],
+      "webhookId": "email-reply-draft-assistant-webhook"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "ok",
+        "options": {
+          "responseCode": 204
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Ack Pub/Sub",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -2208,
+        -560
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify Pub/Sub push token + decode the message envelope.\n// Pub/Sub push payload shape: { message: { data: base64(JSON), messageId, publishTime }, subscription }\nconst item = $input.first().json;\nconst body = item.body ?? item;\nconst query = item.query ?? {};\nconst headers = item.headers ?? {};\nconst EXPECTED_TOKEN = $env.PUBSUB_PUSH_TOKEN || 'REPLACE_WITH_PUSH_VERIFICATION_TOKEN';\nconst presented = query.token || headers['x-pubsub-token'];\nif (presented !== EXPECTED_TOKEN) {\n  throw new Error('Invalid or missing Pub/Sub token');\n}\nconst msg = body.message || {};\nif (!msg.data) {\n  // No data is valid (Pub/Sub may probe). Pass an empty signal so downstream can short-circuit.\n  return [{ json: { skip: true, reason: 'no message.data' } }];\n}\nconst decoded = JSON.parse(Buffer.from(msg.data, 'base64').toString('utf8'));\nreturn [{ json: {\n  emailAddress: decoded.emailAddress,\n  historyId: String(decoded.historyId),\n  pubsubMessageId: msg.messageId,\n  publishTime: msg.publishTime,\n  skip: false,\n} }];\n"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Decode & Verify",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2000,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "REPLACE_WITH_WORKFLOW_ID",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "If Not Probe",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -1808,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Read the persisted lastHistoryId from workflow staticData,\n// then advance it to the notification's historyId. We update BEFORE\n// fanning out so a slow downstream + redelivered push won't reprocess.\nconst staticData = $getWorkflowStaticData('global');\nconst incoming = $input.first().json;\nconst startHistoryId = staticData.lastHistoryId || incoming.historyId;\nstaticData.lastHistoryId = incoming.historyId;\nreturn [{ json: {\n  startHistoryId: String(startHistoryId),\n  currentHistoryId: incoming.historyId,\n  emailAddress: incoming.emailAddress,\n} }];\n"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Read+Advance HistoryId",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1600,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/history",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "startHistoryId",
+              "value": "={{ $json.startHistoryId }}"
+            },
+            {
+              "name": "historyTypes",
+              "value": "messageAdded"
+            },
+            {
+              "name": "labelId",
+              "value": "INBOX"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "History Lookup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1392,
+        -400
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Flatten history records into per-message items, dedupe by messageId,\n// and drop anything not actually a new INBOX arrival from someone other than Sales User.\nconst SELF = ['sales.user@example.com','sales.user@example.com','sales.user@example.com'];\nconst data = $input.first().json;\nconst history = data.history || [];\nconst seen = new Set();\nconst items = [];\nfor (const h of history) {\n  const adds = h.messagesAdded || [];\n  for (const a of adds) {\n    const m = a.message || {};\n    if (!m.id || seen.has(m.id)) continue;\n    // labelIds filter: only INBOX arrivals (history.list already filters but defensive)\n    if (!(m.labelIds || []).includes('INBOX')) continue;\n    seen.add(m.id);\n    items.push({ json: { messageId: m.id, threadId: m.threadId } });\n  }\n}\nif (!items.length) {\n  return [{ json: { messageId: null, threadId: null, skip: true, reason: 'no new INBOX messages in history window' } }];\n}\nreturn items;\n"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Extract Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1184,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "REPLACE_WITH_WORKFLOW_ID",
+              "leftValue": "={{ $json.messageId }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "If Has Message",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -976,
+        -400
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Bootstrap Watch (manual)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2400,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Renew Watch (every 6d)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -2400,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/watch",
+        "authentication": "genericCredentialType",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"labelIds\": [\"INBOX\"],\n  \"labelFilterBehavior\": \"INCLUDE\",\n  \"topicName\": \"projects/executive-assistant-495705/topics/gmail-notify-sample_company\"\n}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        },
+        "genericAuthType": "oAuth2Api"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Call users.watch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2000,
+        280
+      ],
+      "credentials": {
+        "oAuth2Api": {
+          "name": "REPLACE_WITH_OAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Seed staticData.lastHistoryId with the baseline returned by users.watch.\n// Without this, the very first Pub/Sub notification could miss its message\n// because Read+Advance would fall back to incoming.historyId on first run.\nconst staticData = $getWorkflowStaticData('global');\nconst resp = $input.first().json;\nif (resp.historyId) {\n  staticData.lastHistoryId = String(resp.historyId);\n}\nstaticData.lastWatchRenewedAt = new Date().toISOString();\nstaticData.lastWatchExpiration = resp.expiration ? new Date(Number(resp.expiration)).toISOString() : null;\nreturn [{ json: {\n  historyId: resp.historyId,\n  expiration: resp.expiration,\n  expirationISO: staticData.lastWatchExpiration,\n  renewedAt: staticData.lastWatchRenewedAt,\n} }];\n"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Seed HistoryId",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1808,
+        280
+      ]
+    },
+    {
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "List Recent Sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -360,
+        -260
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gmailOAuth2",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "in:sent newer_than:30d -in:chats"
+            },
+            {
+              "name": "maxResults",
+              "value": "15"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Fetch Sent Bodies",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -280,
+        -260
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const messageList = $input.first().json;\nconst ids = (messageList.messages || []).slice(0, 15).map(m => m.id);\n\nfunction htmlToText(html) {\n  return html\n    .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<br\\s*\\/?>/gi, '\\n')\n    .replace(/<\\/p>/gi, '\\n\\n')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\")\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .replace(/[ \\t]+/g, ' ')\n    .trim();\n}\n\nfunction b64decode(s) {\n  return Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8');\n}\n\nfunction extractBody(payload, preferred) {\n  if (!payload) return '';\n  if (payload.mimeType?.startsWith(preferred) && payload.body?.data) {\n    const decoded = b64decode(payload.body.data);\n    return preferred === 'text/html' ? htmlToText(decoded) : decoded;\n  }\n  if (payload.parts) {\n    for (const p of payload.parts) {\n      const t = extractBody(p, preferred);\n      if (t) return t;\n    }\n  }\n  return '';\n}\n\n// Strip quoted reply blocks, forwarded headers, and signatures so we keep only Sales User's prose for voice signal.\nfunction stripQuoted(body) {\n  let cut = body.replace(/On\\s+[A-Z][a-z]+,?\\s+[A-Z][a-z]+\\s+\\d+,?\\s+\\d{4}[\\s\\S]*$/m, '');\n  cut = cut.replace(/-{3,}\\s*Forwarded message[\\s\\S]*$/i, '');\n  cut = cut.replace(/From:\\s+[^\\n]+\\nSent:[\\s\\S]*$/i, '');\n  cut = cut.replace(/From:\\s+[^\\n]+\\nDate:[\\s\\S]*$/i, '');\n  cut = cut.split('\\n').filter(l => !/^\\s*>/.test(l)).join('\\n');\n  return cut.trim();\n}\n\nconst results = await Promise.all(ids.map(async (id) => {\n  try {\n    const resp = await this.helpers.httpRequestWithAuthentication.call(\n      this,\n      'gmailOAuth2',\n      {\n        method: 'GET',\n        url: `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}`,\n        qs: { format: 'full' },\n        json: true,\n      }\n    );\n    const headers = (resp.payload?.headers || []).reduce((acc, h) => {\n      acc[h.name.toLowerCase()] = h.value;\n      return acc;\n    }, {});\n    const rawBody = extractBody(resp.payload, 'text/plain') || extractBody(resp.payload, 'text/html') || resp.snippet || '';\n    const cleanBody = stripQuoted(rawBody);\n    if (!cleanBody || cleanBody.length < 30) return null;\n    return {\n      id,\n      subject: headers.subject || '',\n      to: headers.to || '',\n      date: headers.date || '',\n      body: cleanBody.substring(0, 600),\n    };\n  } catch (e) {\n    return null;\n  }\n}));\n\nconst exemplars = results.filter(Boolean);\nreturn [{ json: { exemplars } }];\n"
+      },
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Compute Open Slots",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -440,
+        -260
+      ],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const calendar = $('Get Calendar Availability').first().json;\nconst busy = (calendar.calendars?.primary?.busy) || [];\n\nconst TZ = 'America/Los_Angeles';\nconst VIMCAL_LINK = 'https://book.vimcal.com/p/Sales UserSales Userfe41b/Sales UserSales User-30-minute-meeting';\nconst WORK_START_HOUR = 8;\nconst WORK_END_HOUR = 18;\nconst LOOKAHEAD_DAYS = 14;\nconst MIN_BLOCK_MIN = 60;\nconst MAX_DAYS = 4;\nconst STEP_MS = 30 * 60 * 1000;  // half-hour resolution\n\n// Merge overlapping busy ranges first.\nconst sorted = busy\n  .map(b => ({ start: new Date(b.start).getTime(), end: new Date(b.end).getTime() }))\n  .filter(b => !Number.isNaN(b.start) && !Number.isNaN(b.end))\n  .sort((a, b) => a.start - b.start);\n\nconst mergedBusy = [];\nfor (const r of sorted) {\n  const last = mergedBusy[mergedBusy.length - 1];\n  if (last && r.start <= last.end) {\n    last.end = Math.max(last.end, r.end);\n  } else {\n    mergedBusy.push({ ...r });\n  }\n}\n\nfunction isBusy(ms) {\n  for (const b of mergedBusy) {\n    if (b.start <= ms && ms < b.end) return true;\n  }\n  return false;\n}\n\n// PT day key + hour using Intl, immune to server TZ.\nfunction ptInfo(ms) {\n  const d = new Date(ms);\n  const dateStr = d.toLocaleDateString('en-CA', { timeZone: TZ }); // YYYY-MM-DD\n  const hour = parseInt(d.toLocaleString('en-US', { timeZone: TZ, hour12: false, hour: '2-digit' }), 10);\n  const weekdayName = d.toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short' });\n  const weekdays = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];\n  return { dateStr, hour, weekday: weekdays.indexOf(weekdayName) };\n}\n\nfunction fmtTime(ms) {\n  return new Date(ms).toLocaleString('en-US', {\n    timeZone: TZ,\n    hour: 'numeric',\n    minute: '2-digit',\n    hour12: true,\n  }).toLowerCase().replace(/\\s/g, '').replace(':00', '');\n}\n\nfunction fmtDayLabel(dateStr) {\n  // dateStr is YYYY-MM-DD in PT. Construct a Date at noon PT to avoid edge cases.\n  const d = new Date(`${dateStr}T20:00:00Z`); // 20Z roughly = 12-1pm PT depending on DST\n  return d.toLocaleDateString('en-US', {\n    timeZone: TZ,\n    weekday: 'long',\n    month: 'long',\n    day: 'numeric',\n  });\n}\n\n// Walk forward in 30-min steps. Skip the rest of today; start at the next PT midnight.\nconst now = Date.now();\nconst startMs = now + 60 * 60 * 1000; // skip the next hour to avoid imminent slots\nconst endMs = now + LOOKAHEAD_DAYS * 86400000;\n\nconst byDay = {}; // dateStr -> list of contiguous free blocks\nlet currentBlock = null;\n\nfor (let t = startMs; t < endMs; t += STEP_MS) {\n  const { dateStr, hour, weekday } = ptInfo(t);\n  const inWindow = (weekday >= 1 && weekday <= 5) && (hour >= WORK_START_HOUR) && (hour < WORK_END_HOUR);\n  const free = inWindow && !isBusy(t) && !isBusy(t + STEP_MS - 1);\n\n  if (free) {\n    if (currentBlock && currentBlock.dateStr === dateStr && currentBlock.end === t) {\n      currentBlock.end = t + STEP_MS;\n    } else {\n      if (currentBlock) {\n        (byDay[currentBlock.dateStr] = byDay[currentBlock.dateStr] || []).push(currentBlock);\n      }\n      currentBlock = { dateStr, start: t, end: t + STEP_MS };\n    }\n  } else if (currentBlock) {\n    (byDay[currentBlock.dateStr] = byDay[currentBlock.dateStr] || []).push(currentBlock);\n    currentBlock = null;\n  }\n}\nif (currentBlock) {\n  (byDay[currentBlock.dateStr] = byDay[currentBlock.dateStr] || []).push(currentBlock);\n}\n\n// Filter blocks >= MIN_BLOCK_MIN.\nconst dayList = [];\nfor (const [dateStr, blocks] of Object.entries(byDay)) {\n  const longBlocks = blocks.filter(b => (b.end - b.start) >= MIN_BLOCK_MIN * 60 * 1000);\n  if (longBlocks.length === 0) continue;\n  dayList.push({ dateStr, blocks: longBlocks });\n}\n\n// Sort chronologically and take top MAX_DAYS.\ndayList.sort((a, b) => a.dateStr.localeCompare(b.dateStr));\nconst top = dayList.slice(0, MAX_DAYS);\n\n// Format for prompt consumption.\nconst openSlotsFormatted = top.map(d => {\n  const label = fmtDayLabel(d.dateStr);\n  const ranges = d.blocks.map(b => `${fmtTime(b.start)} - ${fmtTime(b.end)} PT`).join(', ');\n  return `${label}: ${ranges}`;\n}).join('\\n');\n\nreturn [{ json: {\n  openSlots: top,\n  openSlotsFormatted: openSlotsFormatted || '(no open blocks of 60+ min in working hours over next 14 days)',\n  vimcalLink: VIMCAL_LINK,\n} }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "Test: List Recent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Test": {
+      "main": [
+        [
+          {
+            "node": "Test: List Recent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test: List Recent": {
+      "main": [
+        [
+          {
+            "node": "Test: Extract ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test: Extract ID": {
+      "main": [
+        [
+          {
+            "node": "Fetch Full Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter & Normalize": {
+      "main": [
+        [
+          {
+            "node": "If Not Skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Not Skipped": {
+      "main": [
+        [
+          {
+            "node": "Get Thread",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Get Thread": {
+      "main": [
+        [
+          {
+            "node": "Get Slack Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Slack Context": {
+      "main": [
+        [
+          {
+            "node": "Get Sender Threads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Dismissed Patterns": {
+      "main": [
+        [
+          {
+            "node": "Get Calendar Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "Classify + Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Sonnet 4.5": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Classify + Draft",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify + Draft": {
+      "main": [
+        [
+          {
+            "node": "Parse Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Output": {
+      "main": [
+        [
+          {
+            "node": "If Draft Viable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Draft Viable": {
+      "main": [
+        [
+          {
+            "node": "Build MIME",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Build MIME": {
+      "main": [
+        [
+          {
+            "node": "Create Gmail Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Full Message": {
+      "main": [
+        [
+          {
+            "node": "Filter & Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Calendar Availability": {
+      "main": [
+        [
+          {
+            "node": "Compute Open Slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Sender Threads": {
+      "main": [
+        [
+          {
+            "node": "Get Dismissed Patterns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pub/Sub Webhook": {
+      "main": [
+        [
+          {
+            "node": "Ack Pub/Sub",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Decode & Verify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode & Verify": {
+      "main": [
+        [
+          {
+            "node": "If Not Probe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Not Probe": {
+      "main": [
+        [
+          {
+            "node": "Read+Advance HistoryId",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Read+Advance HistoryId": {
+      "main": [
+        [
+          {
+            "node": "History Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "History Lookup": {
+      "main": [
+        [
+          {
+            "node": "Extract Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Messages": {
+      "main": [
+        [
+          {
+            "node": "If Has Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Has Message": {
+      "main": [
+        [
+          {
+            "node": "Fetch Full Message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Bootstrap Watch (manual)": {
+      "main": [
+        [
+          {
+            "node": "Call users.watch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Renew Watch (every 6d)": {
+      "main": [
+        [
+          {
+            "node": "Call users.watch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call users.watch": {
+      "main": [
+        [
+          {
+            "node": "Seed HistoryId",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Recent Sent": {
+      "main": [
+        [
+          {
+            "node": "Fetch Sent Bodies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Sent Bodies": {
+      "main": [
+        [
+          {
+            "node": "Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Open Slots": {
+      "main": [
+        [
+          {
+            "node": "List Recent Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Los_Angeles",
+    "binaryMode": "separate"
+  },
+  "staticData": {
+    "node:Gmail Trigger": {
+      "Gmail Trigger": {
+        "lastTimeChecked": 1778551870,
+        "possibleDuplicates": [
+          "19e19f41ea2b7791",
+          "19e19ddbd4d5cf83"
+        ]
+      }
+    },
+    "node:Renew Watch (every 6d)": {
+      "recurrenceRules": [
+        145
+      ]
+    },
+    "global": {
+      "lastHistoryId": "98725",
+      "lastWatchRenewedAt": "2026-05-25T07:00:20.794Z",
+      "lastWatchExpiration": "2026-06-01T07:00:19.552Z"
+    }
+  },
+  "meta": null,
+  "pinData": {},
+  "tags": []
+}

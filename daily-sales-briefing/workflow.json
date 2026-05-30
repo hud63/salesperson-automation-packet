@@ -1,0 +1,804 @@
+{
+  "updatedAt": "2026-05-09T17:13:37.639Z",
+  "createdAt": "2026-05-08T17:53:47.111Z",
+  "id": "REPLACE_WITH_WORKFLOW_ID",
+  "name": "Daily Sales Briefing",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "02d0fc2f-a89f-4502-979d-1672de3e1722",
+      "name": "Schedule 6:30 AM Daily",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -2416,
+        -832
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "57fffb18-9d62-468a-8227-36322cce579d",
+      "name": "Manual Test",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2416,
+        -672
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wr05-test-trigger",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "1b624dd2-c44e-4b62-8128-0be14b81bf43",
+      "name": "Webhook Test Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -2416,
+        -512
+      ],
+      "webhookId": "daily-sales-briefing-webhook"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "primary",
+          "mode": "list",
+          "cachedResultName": "primary"
+        },
+        "limit": 30,
+        "options": {
+          "orderBy": "startTime"
+        }
+      },
+      "id": "240aaa5f-b93c-4f3e-a508-fb74b86a9af0",
+      "name": "Get Today Calendar",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -2176,
+        -768
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "name": "REPLACE_WITH_GOOGLECALENDAROAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "primary",
+          "mode": "list",
+          "cachedResultName": "primary"
+        },
+        "options": {
+          "orderBy": "startTime"
+        }
+      },
+      "id": "b85c59b9-03f6-4c6a-af7a-39f57d70606b",
+      "name": "Get Lookahead Calendar",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -1936,
+        -768
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "name": "REPLACE_WITH_GOOGLECALENDAROAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 30,
+        "filters": {
+          "readStatus": "unread",
+          "receivedAfter": "={{ $now.minus({hours: 22}).toISO() }}"
+        }
+      },
+      "id": "a3f1da02-f5a1-4ab1-bfe1-342f7277febb",
+      "name": "Get Recent Emails",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -1696,
+        -768
+      ],
+      "executeOnce": true,
+      "webhookId": "daily-sales-briefing-webhook",
+      "alwaysOutputData": true,
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/databases/REPLACE_WITH_DATABASE_ID/query",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"filter\": {\"property\": \"Status\", \"status\": {\"does_not_equal\": \"Done\"}}, \"page_size\": 100, \"sorts\": [{\"timestamp\": \"created_time\", \"direction\": \"descending\"}]}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "01e52169-0804-4fc5-86ef-6d61bab65bee",
+      "name": "Get Open Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1056,
+        -768
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 25,
+        "filters": {
+          "q": "((is:starred) OR (from:(priority.contact@example.com OR buyer@example.com)) OR (subject:(renewal OR proposal OR pricing OR contract))) newer_than:14d -in:spam -in:trash"
+        }
+      },
+      "id": "86cd3b92-db55-4c3d-ac0b-e6d100d880e0",
+      "name": "Get Needs-Attention Emails",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -1520,
+        -768
+      ],
+      "executeOnce": true,
+      "webhookId": "daily-sales-briefing-webhook",
+      "alwaysOutputData": true,
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 30,
+        "filters": {
+          "q": "in:sent newer_than:14d to:(priority.contact@example.com OR buyer@example.com OR partner@example.com) -in:trash"
+        }
+      },
+      "id": "12b905b2-67e0-4bd3-842c-42382f377d07",
+      "name": "Get Sent Awaiting Reply",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -1296,
+        -768
+      ],
+      "executeOnce": true,
+      "webhookId": "daily-sales-briefing-webhook",
+      "alwaysOutputData": true,
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// WR-05 Build Context v2 -- carry-forward, aging, open windows, Big 3\n// ====================================================================\n\nconst todayCal       = $('Get Today Calendar').all();\nconst lookaheadCal   = $('Get Lookahead Calendar').all();\nconst emailsUnread   = $('Get Recent Emails').all();\nlet emailsAttention  = [];\ntry { emailsAttention = $('Get Needs-Attention Emails').all(); } catch (e) {}\nlet emailsSent = [];\ntry { emailsSent = $('Get Sent Awaiting Reply').all(); } catch (e) {}\nlet tasks = [];\ntry {\n  const tasksRaw = $('Get Open Tasks').all();\n  for (const r of tasksRaw) {\n    const body = r.json || r;\n    const results = body.results || (Array.isArray(body) ? body : []) || [];\n    tasks = tasks.concat(results.map(p => ({ json: p })));\n  }\n} catch (e) { tasks = []; }\n\n// --- Dismissed email patterns from Notion ---\nlet dismissedPatterns = [];\ntry {\n  const dismissedRaw = $('Get Dismissed Emails').all();\n  for (const r of dismissedRaw) {\n    const body = r.json || r;\n    const results = body.results || [];\n    for (const p of results) {\n      const props = p.properties || {};\n      const subject = (props['Subject Pattern']?.title?.[0]?.plain_text || '').trim().toLowerCase();\n      const sender  = (props['Sender']?.rich_text?.[0]?.plain_text || '').trim().toLowerCase();\n      if (subject) dismissedPatterns.push({ subject, sender });\n    }\n  }\n} catch (e) { dismissedPatterns = []; }\n\nconst isDismissed = (email) => {\n  const subj = (email.subject || '').toLowerCase();\n  const from  = (email.from  || '').toLowerCase();\n  return dismissedPatterns.some(p => {\n    if (!subj.includes(p.subject)) return false;\n    if (p.sender && !from.includes(p.sender)) return false;\n    return true;\n  });\n};\n\n// --- Yesterday's brief for carry-forward ---\nlet yesterdayHotItems = [];\ntry {\n  const yesterdayBriefs = $('Get Yesterday Brief').all();\n  if (yesterdayBriefs.length > 0) {\n    const brief = yesterdayBriefs[0].json || yesterdayBriefs[0];\n    const body = brief.textPlain || brief.text || brief.snippet || '';\n    // Extract Hot Items / Big 3 section\n    const hotMatch = body.match(/(?:Hot Items|The Big 3|Big 3)([\\s\\S]*?)(?=\\n##|\\n#[^#]|Today's Schedule|Action List|$)/i);\n    if (hotMatch) {\n      const lines = hotMatch[1].split('\\n').filter(l => /^\\s*[-*\\d.]/.test(l));\n      yesterdayHotItems = lines.map(l => l.replace(/^[\\s\\-\\*\\d.]+/, '').trim()).filter(Boolean);\n    }\n  }\n} catch (e) { /* no yesterday brief -- degrade gracefully */ }\n\n// --- Slack activity (DMs + mentions, last ~30h) ---\nlet slackMessages = [];\ntry {\n  const slackRaw = $('Get Slack Activity').all();\n  for (const r of slackRaw) {\n    const body = r.json || r;\n    const matches = body.messages?.matches || [];\n    for (const m of matches) {\n      slackMessages.push({\n        text: (m.text || '').slice(0, 500),\n        user: m.username || m.user || 'unknown',\n        channel: m.channel?.name || m.channel?.id || '',\n        channelType: m.channel?.is_im ? 'DM' : (m.channel?.is_private ? 'private' : 'channel'),\n        ts: m.ts ? new Date(parseFloat(m.ts) * 1000).toISOString() : '',\n        permalink: m.permalink || ''\n      });\n    }\n  }\n} catch (e) { slackMessages = []; }\n\n// --- Meeting prep: per-meeting Slack correlation ---\nlet meetingPrepAttendees = [];\nlet meetingPrepSlack = [];\ntry {\n  const prepQ = $('Build Meeting Prep Query').first().json;\n  meetingPrepAttendees = prepQ.attendees || [];\n  const prepSlackRaw = $('Get Meeting Prep Slack').all();\n  for (const r of prepSlackRaw) {\n    const body = r.json || r;\n    const matches = body.messages?.matches || [];\n    for (const m of matches) {\n      meetingPrepSlack.push({\n        text: (m.text || '').slice(0, 600),\n        user: m.username || m.user || 'unknown',\n        channel: m.channel?.name || m.channel?.id || '',\n        ts: m.ts ? new Date(parseFloat(m.ts) * 1000).toISOString() : '',\n        permalink: m.permalink || ''\n      });\n    }\n  }\n} catch (e) { /* no prep data */ }\n\n// --- Dedupe attention emails against unread ---\nconst unreadIds = new Set(emailsUnread.map(e => (e.json || e).id));\nemailsAttention = emailsAttention.filter(e => !unreadIds.has((e.json || e).id));\n\n// --- Helpers ---\nconst fmtTime = dt => dt\n  ? new Date(dt).toLocaleString('en-US', {\n      timeZone: 'America/Los_Angeles',\n      hour: 'numeric', minute: '2-digit', hour12: true\n    })\n  : '';\n\nconst fmtDateTime = dt => dt\n  ? new Date(dt).toLocaleString('en-US', {\n      timeZone: 'America/Los_Angeles',\n      weekday: 'short', month: 'short', day: 'numeric',\n      hour: 'numeric', minute: '2-digit', hour12: true\n    })\n  : '';\n\nconst cleanEvent = e => {\n  const j = e.json || e;\n  const attendees = (j.attendees || [])\n    .filter(a => !a.self)\n    .map(a => a.displayName || a.email)\n    .join(', ');\n  return {\n    title: j.summary || 'Untitled',\n    start: j.start?.dateTime || j.start?.date || '',\n    end:   j.end?.dateTime   || j.end?.date   || '',\n    attendees,\n    location: j.location || (j.conferenceData ? 'Video call' : ''),\n    description: (j.description || '').slice(0, 300)\n  };\n};\n\n// --- Compute open windows (30+ min gaps between 8 AM -- 6 PM PT) ---\nconst todayEvents = todayCal.map(cleanEvent);\n\nconst computeOpenWindows = (events) => {\n  // Get current wall-clock in PT\n  const nowPT = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));\n  const workStart = new Date(nowPT); workStart.setHours(8,0,0,0);\n  const workEnd   = new Date(nowPT); workEnd.setHours(18,0,0,0);\n\n  const slots = events\n    .filter(e => e.start && e.end && !/^\\d{4}-\\d{2}-\\d{2}$/.test(e.start))\n    .map(e => ({ start: new Date(e.start), end: new Date(e.end), title: e.title }))\n    .sort((a,b) => a.start - b.start);\n\n  const windows = [];\n  let cursor = workStart;\n  for (const s of slots) {\n    if (s.start > cursor) {\n      const gap = (s.start - cursor) / 60000;\n      if (gap >= 30) windows.push({ start: new Date(cursor), end: new Date(s.start), minutes: Math.round(gap) });\n    }\n    if (s.end > cursor) cursor = s.end;\n  }\n  if (cursor < workEnd) {\n    const gap = (workEnd - cursor) / 60000;\n    if (gap >= 30) windows.push({ start: new Date(cursor), end: workEnd, minutes: Math.round(gap) });\n  }\n  if (windows.length === 0 && slots.length === 0) windows.push({ label: 'All day open' });\n  return windows;\n};\n\nconst openWindows = computeOpenWindows(todayEvents);\n\nconst cleanEmail = e => {\n  const j = e.json || e;\n  let subject = j.Subject || j.subject || '';\n  let from    = j.From    || j.from    || '';\n  let date    = j.Date    || j.date    || '';\n  if (!subject && j.payload?.headers) {\n    const h = j.payload.headers;\n    subject = h.find(x => x.name === 'Subject')?.value || '';\n    from    = h.find(x => x.name === 'From')?.value    || '';\n    date    = h.find(x => x.name === 'Date')?.value    || '';\n  }\n  if (!date && j.internalDate) date = new Date(parseInt(j.internalDate)).toISOString();\n  const labels = (j.labels || j.labelIds || []).map(l => typeof l === 'string' ? l : (l.name || '')).join(',');\n  let to = j.To || j.to || '';\n  if (!to && j.payload?.headers) to = j.payload.headers.find(x => x.name === 'To')?.value || '';\n  let daysSince = 0;\n  if (date) daysSince = Math.floor((Date.now() - new Date(date).getTime()) / 86400000);\n  return { subject: subject || '(no subject)', from: from || 'Unknown', to, date, labels, preview: (j.snippet || '').slice(0,250), daysSince };\n};\n\nconst cleanTask = t => {\n  const j = t.json || t;\n  const p = j.properties || {};\n  const title = p.Task?.title?.[0]?.plain_text\n    || p['Task name']?.title?.[0]?.plain_text\n    || p.Name?.title?.[0]?.plain_text\n    || '(untitled task)';\n  const status   = p.Status?.status?.name   || p.Status?.select?.name || '';\n  const due      = p.Due?.date?.start       || '';\n  const priority = p.Priority?.select?.name || '';\n  const project  = p.Project?.select?.name  || '';\n  const source   = p.Source?.rich_text?.[0]?.plain_text || '';\n  const notes    = (p.Notes?.rich_text?.[0]?.plain_text || '').slice(0,200);\n  let ageDays = 0;\n  if (j.created_time) ageDays = Math.floor((Date.now() - new Date(j.created_time).getTime()) / 86400000);\n  return { title, status, due, priority, project, source, notes, url: j.url || '', ageDays };\n};\n\nconst lookaheadEvents  = lookaheadCal.map(cleanEvent).filter(e => e.title !== 'Untitled' || e.start);\nconst emailUnreadList  = emailsUnread.map(cleanEmail).filter(e => !isDismissed(e));\nconst emailAttentionList = emailsAttention.map(cleanEmail).filter(e => !isDismissed(e));\n\n// --- Awaiting reply detection ---\nconst allOtherEmails = emailsUnread.concat(emailsAttention);\nconst repliedThreadIds = new Set();\nfor (const sent of emailsSent) {\n  const sj = sent.json || sent;\n  const sentDate = parseInt(sj.internalDate || '0');\n  for (const other of allOtherEmails) {\n    const oj = other.json || other;\n    if (oj.threadId === sj.threadId && parseInt(oj.internalDate || '0') > sentDate) {\n      repliedThreadIds.add(sj.threadId);\n      break;\n    }\n  }\n}\nconst sentAwaitingList = emailsSent\n  .filter(e => !repliedThreadIds.has((e.json || e).threadId))\n  .map(cleanEmail)\n  .filter(e => !isDismissed(e));\n\n// --- Tasks ---\nconst allTasks = tasks.map(cleanTask).filter(t => {\n  const s = (t.status || '').toLowerCase();\n  return s !== 'done' && s !== 'complete';\n});\nconst standingTasks    = allTasks.filter(t => t.project === 'Personal' || t.project === 'Non-Sales Admin');\nconst nonStandingTasks = allTasks.filter(t => t.project !== 'Personal' && t.project !== 'Non-Sales Admin');\nnonStandingTasks.sort((a,b) => (b.url || '').localeCompare(a.url || ''));\nconst taskList = nonStandingTasks.slice(0,100);\n\nconst tasksByProject = {};\nfor (const t of taskList) {\n  const proj = t.project || '(no project)';\n  if (!tasksByProject[proj]) tasksByProject[proj] = [];\n  tasksByProject[proj].push(t);\n}\n\n// --- Dates ---\nconst todayLocal = new Date().toLocaleDateString('en-US', {\n  timeZone: 'America/Los_Angeles',\n  weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'\n});\nconst dateISO = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });\n\n// ===================================================================\n// BUILD PROMPT\n// ===================================================================\nlet p = `You are generating Sales User' Daily Prep Brief for ${todayLocal}.\n\n# WHO Sales User IS\n- Role: Business Development at sample_company. Reports to Executive Stakeholder.\n- This inbox and calendar are 100% sample_company; treat every email and meeting as sample_company work unless clearly personal.\n- Focus areas: sample_company rollup sourcing (power services -- solar/BESS O&M, electrical contractors), Example Company Business Development pipeline, Strategic Partnerships DD support.\n- Key people: Executive Stakeholder (CEO, sample_company + Strategic Partnerships), Priority Contact (Shadow partner, industrial vertical), Devan Stakeholder (sample_company corp dev).\n- Priority senders (flag any email from): Executive Stakeholder, Priority Contact, Devan Stakeholder, anyone identified as an acquisition target or rollup operator.\n\n# OUTPUT FORMAT\nOutput Markdown with EXACTLY these section headers. No parenthetical descriptions on headers. Do NOT echo these instructions.\n\n# Daily Prep Brief -- ${todayLocal}\n\n## The Big 3\n## Action List\n## Today's Schedule\n## Email Triage\n## Slack Activity\n## Open Tasks\n## Don't Forget\n## Dropped from Yesterday\n\n# SECTION DEFINITIONS\n\n## The Big 3\nThe 3 things that make today a win. Specific actions with a person or deliverable named. At least one must be strategic (advancing a deal, relationship, or project), not just inbox cleanup.\n\nFormat:\n1. [action] -- [why it matters]\n2. [action] -- [why it matters]\n3. [action] -- [why it matters]\n\nIf truly nothing pressing: \"Quiet day. Pick one strategic item to advance.\"\n\n## Action List\nRemaining actionable items beyond the Big 3. Each item gets:\n- [Day N] age tag (use the age data provided for tasks; for emails, use the daysSince value)\n- [STUCK?] if Day 3+ with no apparent progress\n- [OVERDUE] if Day 7+\n- Format: [Day N] action (who/what)\n- Most urgent first, max 10 items\n- If no items beyond Big 3: \"Big 3 covers it.\"\n\n## Today's Schedule\nTwo parts:\n\n**Meetings**\nFor each meeting, output two lines:\nLine 1: Time | Meeting | Key attendees\nLine 2:   Prep: <2-3 specific items from MEETING PREP CONTEXT below -- recent Slack threads, decisions in flight, files mentioned, open questions. Cite channel names. If MEETING PREP CONTEXT has no hits for this meeting's attendees, write \"Prep: no recent context found.\"\n\nSkip meetings that are clearly personal (Ballet, etc.) -- list them at the end as \"Personal: <title> at <time>\".\n\n**Open Windows**\nFree blocks of 30+ minutes. Suggest which Action List items fit each window.\nUse the OPEN WINDOWS data provided below -- do not recalculate.\n\n## Email Triage\nTwo sub-lists:\n\n**Awaiting My Reply**\n- from -- subject -- what Sales User owes (one line)\n- Pull from NEEDS-ATTENTION and UNREAD data\n\n**Awaiting Their Reply**\n- to -- subject -- N days since sent\n- [NUDGE] tag if 7+ days silent\n- Pull from SENT AWAITING REPLY data\n\nSkip marketing, newsletters, system notifications, invites already on the schedule.\nIf both empty: \"Inbox clear.\"\n\n## Slack Activity\nDMs and @mentions from the last ~24h. Group:\n\n**Direct Messages**\n- from -- channel (or \"DM\") -- one-line summary -- [Day N] if older than today\n- Skip routine pings (\"got it\", \"thx\") unless they require a response\n\n**Mentions in Channels**\n- channel -- from -- one-line context of why Sales User was mentioned\n- Flag anything that asks Sales User a direct question or assigns an action\n\nIf both empty: \"Slack quiet.\"\n\n## Open Tasks\nGroup by project in this order: Example Company Pipeline, Example Company Business Development, Strategic Partnerships, Operations, then the rest.\n- Lead with P0/P1 and items due this week\n- Use task name verbatim; add Notes fragment if it helps\n- Include [Day N] age tag\n- Omit empty projects\n- Exclude Personal and Non-Sales Admin (those go in Don't Forget)\n\n## Don't Forget\nOne bullet per standing item from STANDING ITEMS data. Sort by Priority then Due.\nIf none: \"Nothing dropping off the radar.\"\n\n## Dropped from Yesterday\nCompare YESTERDAY'S ITEMS against today's data. List anything that was in yesterday's brief but does NOT appear in today's Big 3, Action List, or Open Tasks.\nIf nothing dropped or no yesterday data: \"Everything carried forward or completed.\"\n\n# RULES\n- No em dashes (use -- for separators if needed), no emojis. Active voice. Short.\n- Anything from Executive Stakeholder or Priority Contact gets surfaced.\n- Acquisition target outreach (rollup pipeline) takes precedence over internal admin.\n- Use the [Day N] age values from the data; do not guess.\n\n`;\n\np += `\\n=== INPUT DATA ===\\n\\n`;\n\n// --- Yesterday carry-forward ---\np += `--- YESTERDAY'S ITEMS (for Dropped from Yesterday) ---\\n`;\nif (yesterdayHotItems.length > 0) {\n  for (const item of yesterdayHotItems) p += `- ${item}\\n`;\n} else {\n  p += `(No yesterday brief found. Write \"No prior brief to compare.\" in Dropped from Yesterday.)\\n`;\n}\n\n// --- Today's calendar ---\np += `\\n--- TODAY'S CALENDAR (${todayEvents.length} events) ---\\n`;\nfor (const e of todayEvents) {\n  p += `${fmtTime(e.start)} - ${fmtTime(e.end)} | ${e.title}\\n  attendees: ${e.attendees || '(none)'}\\n  location: ${e.location || '(none)'}\\n  desc: ${e.description}\\n\\n`;\n}\n\np += `--- OPEN WINDOWS (30+ min gaps, 8 AM - 6 PM PT) ---\\n`;\nfor (const w of openWindows) {\n  if (w.label) { p += `${w.label}\\n`; }\n  else { p += `${fmtTime(w.start)} - ${fmtTime(w.end)} (${w.minutes} min)\\n`; }\n}\n\n// --- Lookahead ---\np += `\\n--- NEXT 5 DAYS (${lookaheadEvents.length} events) ---\\n`;\nfor (const e of lookaheadEvents.slice(0,30)) {\n  p += `${fmtDateTime(e.start)} | ${e.title} | ${e.attendees || '(no external)'}\\n`;\n}\n\n// --- Emails ---\np += `\\n--- UNREAD EMAILS LAST 22h (${emailUnreadList.length}) ---\\n`;\nfor (const e of emailUnreadList) {\n  p += `FROM: ${e.from}\\nSUBJECT: ${e.subject}\\nDATE: ${e.date} [${e.daysSince}d ago]\\nPREVIEW: ${e.preview}\\n---\\n`;\n}\n\np += `\\n--- NEEDS-ATTENTION EMAILS 14d (${emailAttentionList.length}) ---\\n`;\nfor (const e of emailAttentionList) {\n  p += `FROM: ${e.from}\\nSUBJECT: ${e.subject}\\nDATE: ${e.date} [${e.daysSince}d ago]\\nPREVIEW: ${e.preview}\\n---\\n`;\n}\n\np += `\\n--- SENT AWAITING REPLY (${sentAwaitingList.length}) ---\\n`;\nfor (const e of sentAwaitingList) {\n  p += `TO: ${e.to || e.from}\\nSUBJECT: ${e.subject}\\nSENT: ${e.date} [${e.daysSince}d ago]\\nPREVIEW: ${e.preview}\\n---\\n`;\n}\n\n// --- Slack ---\np += `\\n--- SLACK ACTIVITY (DMs + mentions, ${slackMessages.length}) ---\\n`;\nfor (const m of slackMessages) {\n  p += `[${m.channelType}] ${m.channel} | ${m.user} | ${m.ts}\\n${m.text}\\nlink: ${m.permalink}\\n---\\n`;\n}\n\n// --- Meeting Prep (per-attendee Slack hits, last 7d) ---\np += `\\n--- MEETING PREP CONTEXT (today's external attendees, ${meetingPrepAttendees.length}) ---\\n`;\nif (meetingPrepAttendees.length === 0) {\n  p += `(No external attendees on today's calendar.)\\n`;\n} else {\n  for (const a of meetingPrepAttendees) {\n    p += `\\n[Attendee: ${a.slackRealName || a.calendarName || a.email}${a.email ? ' <' + a.email + '>' : ''}${a.slackId ? ' slack:' + a.slackId : ''}]\\n`;\n    p += `Meetings today: ${a.eventTitles.join('; ')}\\n`;\n    const matchTerms = [a.slackRealName, a.calendarName, a.slackDisplayName, a.slackUsername]\n      .filter(Boolean).map(s => s.toLowerCase());\n    const hits = meetingPrepSlack.filter(m => {\n      const txt = (m.text || '').toLowerCase();\n      const usr = (m.user || '').toLowerCase();\n      if (a.slackId && (txt.includes(a.slackId.toLowerCase()) || usr === a.slackUsername.toLowerCase())) return true;\n      return matchTerms.some(t => t && (txt.includes(t) || usr.includes(t.split(' ')[0])));\n    });\n    if (hits.length === 0) {\n      p += `Recent Slack: (none found in last 7d)\\n`;\n    } else {\n      p += `Recent Slack (top ${Math.min(hits.length, 6)}):\\n`;\n      for (const h of hits.slice(0, 6)) {\n        p += `  [${h.channel}] ${h.user} ${h.ts.slice(0,10)}: ${h.text.slice(0, 250).replace(/\\n/g, ' ')}\\n`;\n        if (h.permalink) p += `    ${h.permalink}\\n`;\n      }\n    }\n  }\n}\n\n// --- Tasks ---\np += `\\n--- STANDING ITEMS (${standingTasks.length}) ---\\n`;\nfor (const t of standingTasks) {\n  p += `[${t.project}] ${t.priority || '--'} | [${t.status}] ${t.title} | due: ${t.due || '(none)'} | age: ${t.ageDays}d\\n`;\n  if (t.notes) p += `  notes: ${t.notes}\\n`;\n  if (t.source) p += `  source: ${t.source}\\n`;\n}\n\np += `\\n--- OPEN TASKS (${taskList.length}) ---\\n`;\nconst projectOrder = ['Example Company Pipeline','Example Company Business Development','Strategic Partnerships','Operations'];\nconst seenProjects = new Set();\nfor (const proj of projectOrder) {\n  if (!tasksByProject[proj]) continue;\n  seenProjects.add(proj);\n  p += `\\n[${proj}]\\n`;\n  for (const t of tasksByProject[proj]) {\n    p += `  ${t.priority || '--'} | [${t.status}] ${t.title} | due: ${t.due || '(none)'} | age: ${t.ageDays}d\\n`;\n    if (t.notes) p += `    notes: ${t.notes}\\n`;\n    if (t.source) p += `    source: ${t.source}\\n`;\n  }\n}\nfor (const proj of Object.keys(tasksByProject)) {\n  if (seenProjects.has(proj)) continue;\n  p += `\\n[${proj}]\\n`;\n  for (const t of tasksByProject[proj]) {\n    p += `  ${t.priority || '--'} | [${t.status}] ${t.title} | due: ${t.due || '(none)'} | age: ${t.ageDays}d\\n`;\n    if (t.notes) p += `    notes: ${t.notes}\\n`;\n  }\n}\n\nreturn [{ json: { prompt: p, todayLocal, dateISO, eventCount: todayEvents.length, emailCount: emailUnreadList.length + emailAttentionList.length, taskCount: taskList.length } }];\n"
+      },
+      "id": "e0f465e1-316a-435e-a211-7edf306f7a16",
+      "name": "Build Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        592,
+        -768
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt }}"
+      },
+      "id": "926cd88e-71a3-40c5-b1e2-6270ecfe33e2",
+      "name": "Generate Daily Brief",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.6,
+      "position": [
+        208,
+        -208
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "claude-sonnet-4-5-20250929",
+          "mode": "list",
+          "cachedResultName": "claude-sonnet-4-5"
+        },
+        "options": {
+          "maxTokensToSample": 4000,
+          "temperature": 0.3
+        }
+      },
+      "id": "922c39f5-731d-42cd-a8d9-c48c133ab1cb",
+      "name": "Claude Sonnet 4.5",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        208,
+        -48
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "name": "REPLACE_WITH_ANTHROPICAPI_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Format Output v2 -- updated header for Daily Prep Brief v2\nconst llm = $input.first().json;\nconst ctx = $('Build Context').first().json;\nconst text = llm.text || llm.output || llm.response || llm.content || '';\nconst todayLocal = ctx.todayLocal;\nconst dateISO = ctx.dateISO;\n\n// Markdown to HTML\nconst escapeHtml = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');\nconst lines = text.split('\\n');\nlet html = '';\nlet inList = false;\nlet inOl = false;\nfor (const raw of lines) {\n  const line = raw.trimEnd();\n  // Ordered list items (1. 2. 3.)\n  const olMatch = line.match(/^(\\d+)\\.\\s+(.+)/);\n  if (line.startsWith('# ')) {\n    if (inList) { html += '</ul>'; inList = false; }\n    if (inOl)   { html += '</ol>'; inOl = false; }\n    html += `<h1 style=\"font-size:18px;margin:18px 0 8px;color:#1a3a5c;\">${escapeHtml(line.slice(2))}</h1>`;\n  } else if (line.startsWith('## ')) {\n    if (inList) { html += '</ul>'; inList = false; }\n    if (inOl)   { html += '</ol>'; inOl = false; }\n    html += `<h2 style=\"font-size:15px;margin:14px 0 6px;color:#1a3a5c;border-bottom:1px solid #e5e7eb;padding-bottom:4px;\">${escapeHtml(line.slice(3))}</h2>`;\n  } else if (line.startsWith('### ')) {\n    if (inList) { html += '</ul>'; inList = false; }\n    if (inOl)   { html += '</ol>'; inOl = false; }\n    html += `<h3 style=\"font-size:13px;margin:10px 0 4px;color:#374151;\">${escapeHtml(line.slice(4))}</h3>`;\n  } else if (line.startsWith('- ') || line.startsWith('* ')) {\n    if (inOl) { html += '</ol>'; inOl = false; }\n    if (!inList) { html += '<ul style=\"margin:4px 0 8px 20px;padding:0;\">'; inList = true; }\n    let bullet = line.slice(2);\n    bullet = bullet.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');\n    // Highlight age tags\n    bullet = bullet.replace(/\\[(Day \\d+)\\]/g, '<span style=\"color:#9333ea;font-weight:600;\">[$1]</span>');\n    bullet = bullet.replace(/\\[STUCK\\?\\]/g, '<span style=\"color:#dc2626;font-weight:700;\">[STUCK?]</span>');\n    bullet = bullet.replace(/\\[OVERDUE\\]/g, '<span style=\"color:#dc2626;font-weight:700;\">[OVERDUE]</span>');\n    bullet = bullet.replace(/\\[NUDGE\\]/g, '<span style=\"color:#d97706;font-weight:600;\">[NUDGE]</span>');\n    html += `<li style=\"margin:3px 0;font-size:13px;line-height:1.5;\">${bullet}</li>`;\n  } else if (olMatch) {\n    if (inList) { html += '</ul>'; inList = false; }\n    if (!inOl) { html += '<ol style=\"margin:4px 0 8px 20px;padding:0;\">'; inOl = true; }\n    let item = olMatch[2];\n    item = item.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');\n    html += `<li style=\"margin:3px 0;font-size:13px;line-height:1.5;\">${item}</li>`;\n  } else if (line === '') {\n    if (inList) { html += '</ul>'; inList = false; }\n    if (inOl)   { html += '</ol>'; inOl = false; }\n  } else {\n    if (inList) { html += '</ul>'; inList = false; }\n    if (inOl)   { html += '</ol>'; inOl = false; }\n    let para = escapeHtml(line);\n    para = para.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');\n    html += `<p style=\"margin:6px 0;font-size:13px;line-height:1.5;\">${para}</p>`;\n  }\n}\nif (inList) html += '</ul>';\nif (inOl) html += '</ol>';\n\nconst fullHtml = `\n<div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;max-width:680px;margin:0 auto;color:#222;\">\n  <div style=\"background:#1a3a5c;padding:18px 22px;border-radius:8px 8px 0 0;\">\n    <h1 style=\"margin:0;color:#fff;font-size:18px;font-weight:600;\">Daily Prep Brief</h1>\n    <p style=\"margin:3px 0 0;color:#a8c4e0;font-size:12px;\">${todayLocal}</p>\n  </div>\n  <div style=\"padding:20px 24px;background:#fff;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;\">\n    ${html}\n  </div>\n  <p style=\"font-size:10px;color:#aaa;text-align:center;margin-top:10px;\">Generated by n8n WR-05 v2</p>\n</div>`;\n\n// Notion blocks (same logic, capped at 100)\nconst stripBold = s => String(s).replace(/\\*\\*([^*]+)\\*\\*/g, '$1');\nconst para_b  = content => ({ object:'block', type:'paragraph', paragraph: { rich_text: [{ type:'text', text:{ content: stripBold(content).slice(0,1900) } }] } });\nconst heading_b = (level, content) => ({ object:'block', type:`heading_${level}`, [`heading_${level}`]: { rich_text: [{ type:'text', text:{ content: stripBold(content).slice(0,1900) } }] } });\nconst bullet_b = content => ({ object:'block', type:'bulleted_list_item', bulleted_list_item: { rich_text: [{ type:'text', text:{ content: stripBold(content).slice(0,1900) } }] } });\nconst numbered_b = content => ({ object:'block', type:'numbered_list_item', numbered_list_item: { rich_text: [{ type:'text', text:{ content: stripBold(content).slice(0,1900) } }] } });\n\nconst blocks = [];\nlet buffer = '';\nconst flushBuffer = () => {\n  if (!buffer.trim()) { buffer = ''; return; }\n  blocks.push(para_b(buffer.trim()));\n  buffer = '';\n};\nfor (const raw of text.split('\\n')) {\n  const line = raw.trimEnd();\n  const olM = line.match(/^\\d+\\.\\s+(.+)/);\n  if (line.startsWith('# '))       { flushBuffer(); blocks.push(heading_b(1, line.slice(2))); }\n  else if (line.startsWith('## '))  { flushBuffer(); blocks.push(heading_b(2, line.slice(3))); }\n  else if (line.startsWith('### ')){ flushBuffer(); blocks.push(heading_b(3, line.slice(4))); }\n  else if (line.startsWith('- ') || line.startsWith('* ')) { flushBuffer(); blocks.push(bullet_b(line.slice(2))); }\n  else if (olM) { flushBuffer(); blocks.push(numbered_b(olM[1])); }\n  else if (line === '') { flushBuffer(); }\n  else { buffer = buffer ? buffer + '\\n' + line : line; }\n}\nflushBuffer();\n\nconst childrenBlocks = blocks.slice(0, 100);\nconst notionPayload = {\n  parent: { database_id: 'fa34c367-333f-4254-8fdf-ce8961b6e7f4' },\n  properties: {\n    Date:   { title: [{ text: { content: dateISO } }] },\n    Status: { select: { name: 'Generated' } }\n  },\n  children: childrenBlocks\n};\n\nreturn [{\n  json: {\n    subject: `Daily Prep Brief - ${todayLocal}`,\n    html: fullHtml,\n    rawText: text,\n    dateISO,\n    notionTitle: dateISO,\n    notionPayload\n  }\n}];\n"
+      },
+      "id": "b6fc1e82-c9a3-4568-8580-10aa02da9012",
+      "name": "Format Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        -208
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "sales.user@example.com",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "9961694c-72f9-4787-aa60-3a9a4635e365",
+      "name": "Send Brief to Sales User",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        688,
+        -304
+      ],
+      "webhookId": "daily-sales-briefing-webhook",
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/pages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.notionPayload) }}",
+        "options": {}
+      },
+      "id": "30e31ecd-348e-4f4f-98ab-e42621e42180",
+      "name": "Create Notion Brief Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        688,
+        -112
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.notion.com/v1/databases/REPLACE_WITH_DATABASE_ID/query",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Notion-Version",
+              "value": "2022-06-28"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"page_size\": 100}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "9303d6f6-1699-4229-83e8-bc3cdf93222c",
+      "name": "Get Dismissed Emails",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -816,
+        -768
+      ],
+      "credentials": {
+        "notionOAuth2Api": {
+          "name": "REPLACE_WITH_NOTIONOAUTH2API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 1,
+        "filters": {
+          "q": "subject:\"Daily Prep Brief\" from:sales.user@example.com newer_than:3d -in:trash"
+        }
+      },
+      "id": "f1bf2f38-9014-490d-86ea-22fc48d870bf",
+      "name": "Get Yesterday Brief",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        -608,
+        -768
+      ],
+      "executeOnce": true,
+      "webhookId": "daily-sales-briefing-webhook",
+      "alwaysOutputData": true,
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "REPLACE_WITH_GMAILOAUTH2_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://slack.com/api/search.messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "=(to:me OR <@REPLACE_WITH_SLACK_USER_ID>) after:{{ $now.minus({hours:30}).toFormat('yyyy-MM-dd') }}"
+            },
+            {
+              "name": "count",
+              "value": "50"
+            },
+            {
+              "name": "sort",
+              "value": "timestamp"
+            },
+            {
+              "name": "sort_dir",
+              "value": "desc"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Get Slack Activity",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "alwaysOutputData": true,
+      "position": [
+        -416,
+        -768
+      ],
+      "credentials": {
+        "slackApi": {
+          "name": "REPLACE_WITH_SLACKAPI_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Resolve calendar attendee emails to Slack users via handle/first-name match.\n// (Slack OAuth scope doesn't include email-on-list, so match by email local part.)\nconst events = $('Get Today Calendar').all();\nconst Sales User_EMAILS = new Set(['sales.user@example.com', 'sales.user@example.com', 'sales.user']);\n\nlet slackUsers = [];\ntry {\n  const usersRaw = $('Get Slack Users').all();\n  for (const r of usersRaw) {\n    const body = r.json || r;\n    const members = body.members || [];\n    for (const m of members) {\n      if (m.deleted || m.is_bot || m.id === 'USLACKBOT') continue;\n      slackUsers.push(m);\n    }\n  }\n} catch (e) {}\n\nconst buildFullName = (m) => {\n  const fn = m.profile?.first_name || '';\n  const ln = m.profile?.last_name || '';\n  const dn = m.profile?.display_name || '';\n  if (fn && ln) return `${fn} ${ln}`.trim();\n  if (m.real_name) return m.real_name;\n  if (dn) return dn;\n  return m.name || '';\n};\n\nconst resolveAttendee = (email) => {\n  const local = email.split('@')[0].toLowerCase();\n  // 1. Slack handle (`name`) exact match\n  let m = slackUsers.find(u => (u.name || '').toLowerCase() === local);\n  if (m) return m;\n  // 2. first_name exact match (lowercased)\n  const firstMatches = slackUsers.filter(u => (u.profile?.first_name || '').toLowerCase() === local);\n  if (firstMatches.length === 1) return firstMatches[0];\n  // 3. handle starts with local part\n  m = slackUsers.find(u => (u.name || '').toLowerCase().startsWith(local));\n  if (m) return m;\n  return null;\n};\n\nconst attendeesByEmail = new Map();\nfor (const e of events) {\n  const ev = e.json || e;\n  const title = ev.summary || '';\n  for (const a of (ev.attendees || [])) {\n    if (a.self) continue;\n    const email = (a.email || '').toLowerCase();\n    if (Sales User_EMAILS.has(email)) continue;\n    if (email.includes('@resource.calendar.google.com')) continue;\n    if (!email) continue;\n    if (!attendeesByEmail.has(email)) {\n      const slackUser = resolveAttendee(email);\n      attendeesByEmail.set(email, {\n        email,\n        calendarName: a.displayName || '',\n        slackId: slackUser?.id || '',\n        slackUsername: slackUser?.name || '',\n        slackRealName: slackUser ? buildFullName(slackUser) : '',\n        slackDisplayName: slackUser?.profile?.display_name || '',\n        eventTitles: []\n      });\n    }\n    attendeesByEmail.get(email).eventTitles.push(title);\n  }\n}\n\nconst attendees = [...attendeesByEmail.values()];\nconst sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);\n\nconst queryParts = [];\nfor (const a of attendees) {\n  if (a.slackId) {\n    queryParts.push(`<@${a.slackId}>`);\n    queryParts.push(`from:<@${a.slackId}>`);\n  }\n  if (a.slackRealName && a.slackRealName.includes(' ')) {\n    queryParts.push(`\"${a.slackRealName}\"`);\n  }\n}\n\nconst slackQuery = queryParts.length > 0\n  ? `(${[...new Set(queryParts)].join(' OR ')}) after:${sevenDaysAgo}`\n  : '';\n\nreturn [{\n  json: {\n    slackQuery,\n    attendees,\n    sevenDaysAgo,\n    debug: {\n      slackUserCount: slackUsers.length,\n      attendeesResolved: attendees.filter(a => a.slackId).length,\n      attendeesUnresolved: attendees.filter(a => !a.slackId).length\n    }\n  }\n}];\n"
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Build Meeting Prep Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        -768
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://slack.com/api/search.messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.slackQuery || 'in:#__no_attendees_today__' }}"
+            },
+            {
+              "name": "count",
+              "value": "30"
+            },
+            {
+              "name": "sort",
+              "value": "timestamp"
+            },
+            {
+              "name": "sort_dir",
+              "value": "desc"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Get Meeting Prep Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "alwaysOutputData": true,
+      "position": [
+        272,
+        -768
+      ],
+      "credentials": {
+        "slackApi": {
+          "name": "REPLACE_WITH_SLACKAPI_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://slack.com/api/users.list",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "200"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "REPLACE_WITH_WORKFLOW_ID",
+      "name": "Get Slack Users",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "alwaysOutputData": true,
+      "position": [
+        -224,
+        -768
+      ],
+      "credentials": {
+        "slackApi": {
+          "name": "REPLACE_WITH_SLACKAPI_CREDENTIAL"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule 6:30 AM Daily": {
+      "main": [
+        [
+          {
+            "node": "Get Today Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test": {
+      "main": [
+        [
+          {
+            "node": "Get Today Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Test Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Today Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Today Calendar": {
+      "main": [
+        [
+          {
+            "node": "Get Lookahead Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Lookahead Calendar": {
+      "main": [
+        [
+          {
+            "node": "Get Recent Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Recent Emails": {
+      "main": [
+        [
+          {
+            "node": "Get Needs-Attention Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Open Tasks": {
+      "main": [
+        [
+          {
+            "node": "Get Dismissed Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Needs-Attention Emails": {
+      "main": [
+        [
+          {
+            "node": "Get Sent Awaiting Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Sent Awaiting Reply": {
+      "main": [
+        [
+          {
+            "node": "Get Open Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Context": {
+      "main": [
+        [
+          {
+            "node": "Generate Daily Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Daily Brief": {
+      "main": [
+        [
+          {
+            "node": "Format Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Sonnet 4.5": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate Daily Brief",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Output": {
+      "main": [
+        [
+          {
+            "node": "Send Brief to Sales User",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Create Notion Brief Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Dismissed Emails": {
+      "main": [
+        [
+          {
+            "node": "Get Yesterday Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Yesterday Brief": {
+      "main": [
+        [
+          {
+            "node": "Get Slack Activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Slack Activity": {
+      "main": [
+        [
+          {
+            "node": "Get Slack Users",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Meeting Prep Query": {
+      "main": [
+        [
+          {
+            "node": "Get Meeting Prep Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Meeting Prep Slack": {
+      "main": [
+        [
+          {
+            "node": "Build Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Slack Users": {
+      "main": [
+        [
+          {
+            "node": "Build Meeting Prep Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timezone": "America/Los_Angeles"
+  },
+  "staticData": {
+    "node:Schedule 6:30 AM Daily": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": null,
+  "pinData": {},
+  "tags": []
+}
